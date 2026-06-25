@@ -121,4 +121,105 @@ def parse_financial_amounts(text):
     for line in reversed(lines):
         line_low = line.lower()
         if any(k in line_low for k in ["total", "gesamtsumme", "endbetrag", "brutto", "rechnungsbetrag", "zu zahlen"]):
-            if "mwst" in line_low or "netto" in line_low or "
+            if "mwst" in line_low or "netto" in line_low or "ust" in line_low:
+                continue
+            
+            price_match = re.search(r"([\d\.]*,\d{2})", line)
+            if price_match:
+                try:
+                    total_amount = float(price_match.group(1).replace(".", "").replace(",", "."))
+                    break
+                except:
+                    continue
+
+    # 3. Logische Plausibilitätsprüfungen und Kreuzrechnungen
+    if total_amount == 0.0 and mwst_19 > 0:
+        total_amount = round(mwst_19 * 119 / 19, 2)
+    elif mwst_19 == 0.0 and total_amount > 0 and "19%" in text_lower:
+        mwst_19 = round(total_amount * 19 / 119, 2)
+
+    return total_amount, mwst_19
+
+# --- UI Implementierung (Streamlit Frontend) ---
+
+uploaded_files = st.file_uploader("Wählen Sie PDF-Rechnungen aus (Mehrfachauswahl möglich)", type=["pdf"], accept_multiple_files=True)
+
+if uploaded_files:
+    receipt_data = []
+    
+    st.subheader("Analyse-Protokoll")
+    
+    for uploaded_file in uploaded_files:
+        file_bytes = uploaded_file.read()
+        raw_text = extract_text_from_pdf(file_bytes)
+        
+        # Daten-Parsing über das Kombi-Modul
+        detected_date = advanced_date_parser(raw_text)
+        vendor = advanced_vendor_parser(raw_text)
+        total, mwst_19 = parse_financial_amounts(raw_text)
+        
+        # ISO-Konvertierung des Datums (DD.MM.YYYY zu YYYY-MM-DD)
+        date_str = detected_date
+        if "." in detected_date:
+            try:
+                date_str = datetime.strptime(detected_date, "%d.%m.%Y").strftime("%Y-%m-%d")
+            except:
+                pass
+        
+        # 특수문자나 공백이 파일명에 악영향을 주지 않도록 가볍게 정제
+        vendor_clean = re.sub(r'[\\/*?:"<>|]', '', vendor).strip()
+        
+        # DATEV-konformer Dateiname: YYYY-MM-DD_Verkäufer_BetragEUR.pdf
+        proposed_name = f"{date_str}_{vendor_clean}_{total:.2f}EUR.pdf"
+        
+        st.success(f"✔ Erfolgreich: {uploaded_file.name} ➔ **{proposed_name}**")
+        
+        receipt_data.append({
+            "Rechnungsdatum": date_str,
+            "Verkäufer": vendor,
+            "Brutto (€)": total,
+            "MwSt 19% (€)": mwst_19,
+            "Netto (€)": round(total - mwst_19, 2),
+            "DATEV-Dateiname": proposed_name
+        })
+        
+    # Zusammenfassung und Tabellenanzeige
+    df = pd.DataFrame(receipt_data)
+    
+    st.markdown("---")
+    st.subheader("📊 Monatliche Auswertungsübersicht")
+    
+    total_brutto = df["Brutto (€)"].sum()
+    total_mwst = df["MwSt 19% (€)"].sum()
+    total_netto = df["Netto (€)"].sum()
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Gesamt Brutto", f"{total_brutto:,.2f} €")
+    col2.metric("Erstattbare MwSt (19%)", f"{total_mwst:,.2f} €")
+    col3.metric("Gesamt Netto", f"{total_netto:,.2f} €")
+    
+    st.dataframe(df, use_container_width=True)
+    
+    # Excel-Export mit Summenzeile vorbereiten
+    total_row = {
+        "Rechnungsdatum": "GESAMT (Total)", 
+        "Verkäufer": "", 
+        "Brutto (€)": total_brutto, 
+        "MwSt 19% (€)": total_mwst, 
+        "Netto (€)": total_netto, 
+        "DATEV-Dateiname": f"{len(df)} Belege"
+    }
+    df_excel = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
+    
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_excel.to_excel(writer, index=False, sheet_name='Ausgaben')
+    processed_data = output.getvalue()
+    
+    current_month = datetime.now().strftime("%Y-%m")
+    st.download_button(
+        label="📥 Monatsbericht als Excel (.xlsx) herunterladen",
+        data=processed_data,
+        file_name=f"Ausgabenbericht_{current_month}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
