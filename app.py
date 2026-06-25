@@ -140,78 +140,91 @@ def advanced_vendor_parser(text):
 
 def parse_financial_amounts(text):
     """
-    노이즈 무작위 합산 버그를 해결한 최종 정밀 엔진.
-    % 기호를 제외한 순수 금액 후보 중 가장 신뢰도 높은 단일 금액을 추출하여 19% 세금을 정밀 발라냄.
+    독일식 금액 표기(,와 .) 및 OCR의 기호 오인식 버그를 완벽히 치유하는 금액 검증 엔진
     """
-    # 1. 세율 표기(% 붙은 숫자) 기호 먼저 강제 제거 (19,00% 등의 노이즈 차단)
+    # 1. % 기호가 붙은 비율 데이터 전처리로 제거
     clean_text_for_num = re.sub(r"\d+(?:[\.,]\d*)\s*%", "", text)
     
-    # 2. 순수 금액 형태의 숫자만 추출
+    # 2. 금액 형태의 숫자 추출 (쉼표든 마침표든 뒤에 숫자 2개가 붙은 패턴 추출)
     raw_amounts = re.findall(r"\b\d+(?:[\.,]\d{2})\b", clean_text_for_num)
     
     candidates = []
     for amt in raw_amounts:
         try:
-            clean_amt = amt.replace(".", "").replace(",", ".")
+            # 💡 [핵심 버그 수정] 마침표와 쉼표가 섞여서 오인식되는 경우 처리
+            # 마지막 3글자 앞에 있는 기호만 소수점으로 인정하고, 그 외의 기호는 천단위로 간주해 지움
+            if "," in amt and "." in amt:
+                # 둘 다 있으면 일반적인 독일식 표기 (예: 1.500,20)
+                clean_amt = amt.replace(".", "").replace(",", ".")
+            elif "," in amt:
+                # 쉼표만 있으면 독일식 소수점 (예: 193,20)
+                clean_amt = amt.replace(",", ".")
+            elif "." in amt:
+                # 마침표만 있는 경우, 이것이 소수점인지 천단위인지 판단
+                # 뒤에서 3번째 자리에 마침표가 있다면 소수점으로 가동 (예: 193.20)
+                if amt[-3] == ".":
+                    clean_amt = amt
+                else:
+                    clean_amt = amt.replace(".", "")
+            else:
+                clean_amt = amt
+
             val = float(clean_amt)
-            # 주유소 영수증 특성상 현실적인 주유 금액 범위 설정 (1유로 이상 ~ 300유로 이하)
-            if 1.0 <= val <= 300.0 and val not in candidates:
+            # 금액 상한선을 세무사 비용까지 커버할 수 있도록 1000유로로 확장
+            if 1.0 <= val <= 1000.0 and val not in candidates:
                 candidates.append(val)
         except ValueError:
             continue
 
-    # 내림차순 정렬 (큰 금액이 앞으로)
+    # 내림차순 정렬
     candidates = sorted(candidates, reverse=True)
 
     total_brutto = 0.0
     mwst_19 = 0.0
     match_found = False
 
-    # [Scenario A] Brutto = Netto + MwSt 공식이 완벽히 성립하는 3개 조합 검증
+    # [Scenario A] Brutto = Netto + MwSt 공식 완벽 검증 (193.20 + 36.71 == 229.91)
     if len(candidates) >= 3:
         for i in range(len(candidates)):
             for j in range(i + 1, len(candidates)):
                 for k in range(j + 1, len(candidates)):
-                    B = candidates[i]
-                    N = candidates[j]
-                    M = candidates[k]
+                    B = candidates[i]  # 가장 큰 값 (Brutto 후보: 229.91)
+                    N = candidates[j]  # 중간 값 (Netto 후보: 193.20)
+                    M = candidates[k]  # 가장 작은 값 (MwSt 후보: 36.71)
                     
+                    # 229.91 == 193.20 + 36.71 검증 (허용 오차 0.05 EUR)
                     if abs(B - (N + M)) < 0.05:
-                        if abs(M - (N * 0.19)) < 0.5 or abs(M - (B * 19 / 119)) < 0.5:
-                            total_brutto = B
-                            mwst_19 = M
-                            match_found = True
-                            break
+                        total_brutto = B
+                        mwst_19 = M
+                        match_found = True
+                        break
                 if match_found: break
             if match_found: break
 
-    # [Scenario B] 하단이 잘려 수식 검증은 안 되지만, 영수증 내에 유효한 금액 후보가 존재할 때
-    if not match_found and len(candidates) >= 1:
-        # 무작위 합산(sum)을 지우고, 후보군 중 가장 합리적인 '가장 큰 금액'을 총액으로 선정
-        # 단, 비정상적으로 큰 노이즈를 방어하기 위해 리스트 내 상위 값을 필터링
-        for v in candidates:
-            # 주유소 영수증에서 단일 결제 금액으로 가장 유력한 상한선 매칭 (예: 150유로 미만)
-            if v < 150.0:
-                total_brutto = v
-                # 독일 표준 부가세율 19% 역산 처리
-                mwst_19 = round(total_brutto * 19 / 119, 2)
-                match_found = True
-                break
-
-    # [Scenario C] 완전 폴백 (텍스트 키워드 기반 매칭)
-    if total_brutto == 0.0:
+    # [Scenario B] 수식 검증 실패 시 텍스트 앵커 기반 폴백
+    if not match_found:
         lines = text.split('\n')
         for line in reversed(lines):
             line_low = line.lower()
-            if any(k in line_low for k in ["total", "gesamtsumme", "endbetrag", "brutto", "rechnungsbetrag", "eur"]):
-                if any(x in line_low for x in ["mwst", "netto", "ust"]): continue
-                price_match = re.search(r"([\d\.]*,\d{2})", line)
+            if any(k in line_low for k in ["total", "gesamtsumme", "endbetrag", "brutto", "rechnungsbetrag", "zu zahlender betrag"]):
+                if any(x in line_low for x in ["netto"]) and not "brutto" in line_low: continue
+                price_match = re.search(r"([\d\.]*,\d{2}|[\d,]*\.\d{2})", line)
                 if price_match:
                     try:
-                        total_brutto = float(price_match.group(1).replace(".", "").replace(",", "."))
+                        matched_val = price_match.group(1).replace(".", "").replace(",", ".")
+                        # 소수점 보정
+                        if price_match.group(1)[-3] in [".", ","]:
+                            matched_val = price_match.group(1)[:-3].replace(".", "").replace(",", "") + "." + price_match.group(1)[-2:]
+                        total_brutto = float(matched_val)
                         mwst_19 = round(total_brutto * 19 / 119, 2)
+                        match_found = True
                         break
                     except: continue
+
+    # [Scenario C] 최악의 상황 폴백 (가장 큰 유효 금액을 Brutto로 지정)
+    if not match_found and len(candidates) >= 1:
+        total_brutto = candidates[0]
+        mwst_19 = round(total_brutto * 19 / 119, 2)
 
     return total_brutto, mwst_19
 
