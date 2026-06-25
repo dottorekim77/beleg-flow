@@ -4,17 +4,27 @@ from pypdf import PdfReader
 import io
 import re
 from datetime import datetime
+import numpy as np
+from PIL import Image
+import easyocr
 
-# 1. Streamlit Seiteneinstellungen (Page Configuration)
+# 1. Streamlit Seiteneinstellungen
 st.set_page_config(page_title="DE Beleg-Parser Pro", page_icon="🧾", layout="centered")
 
-st.title("🧾 Automatische Belegabrechnung & MwSt-Rechner")
-st.write("Laden Sie Ihre PDF-Rechnungen hier hoch. Das Tool erkennt Rechnungsdatum, Verkäufer, Brutto, Netto, MwSt 19% und benennt die Dateien DATEV-konform um.")
+st.title("🧾 Automatische Belegabrechnung (PDF & Bild)")
+st.write("Laden Sie Ihre PDF-Rechnungen oder Bilddateien (PNG, JPG, JPEG) hoch. Das Tool extrahiert die Daten automatisch.")
 
-# --- Kernfunktionen für Datenanalyse ---
+# EasyOCR Reader 초기화 (독일어와 영어 지정)
+@st.cache_resource
+def load_ocr_reader():
+    return easyocr.Reader(['de', 'en'], gpu=False)
+
+reader_ocr = load_ocr_reader()
+
+# --- 데이터 추출 핵심 함수 ---
 
 def extract_text_from_pdf(file_bytes):
-    """Extrahiert Text aus hochgeladenen PDF-Dateien"""
+    """PDF에서 텍스트 추출"""
     try:
         pdf_file = io.BytesIO(file_bytes)
         reader = PdfReader(pdf_file)
@@ -25,42 +35,48 @@ def extract_text_from_pdf(file_bytes):
     except Exception:
         return ""
 
+def extract_text_from_image(file_bytes):
+    """이미지 파일(PNG, JPG)에서 OCR로 텍스트 추출"""
+    try:
+        image = Image.open(io.BytesIO(file_bytes))
+        # EasyOCR 인식을 위해 넘파이 배열로 변환
+        image_np = np.array(image)
+        results = reader_ocr.readtext(image_np, detail=0)
+        # 인식된 모든 문장들을 줄바꿈으로 이어붙여 텍스트로 만듦
+        return "\n".join(results)
+    except Exception as e:
+        return f"OCR Error: {e}"
+
 def advanced_date_parser(text):
-    """Ermittelt das korrekte Rechnungsdatum anhand von Schlüsselwörtern"""
+    """날짜 추출 알고리즘"""
     text_lines = text.split('\n')
     date_keywords = ["rechnungsdatum", "leistungsdatum", "belegdatum", "datum vom", "datum:", "ausstellungsdatum"]
     
-    # 1. Priorität: Datum in der gleichen Zeile wie ein Schlüsselwort
     for line in text_lines:
         line_low = line.lower()
         if any(kw in line_low for kw in date_keywords):
             match = re.search(r"(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})", line)
-            if match:
-                return match.group(1)
+            if match: return match.group(1)
 
-    # 2. Priorität: Das erste gefundene Datum im gesamten Dokument
     all_dates = re.findall(r"(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})", text)
-    if all_dates:
-        return all_dates[0]
-        
+    if all_dates: return all_dates[0]
     return datetime.now().strftime("%Y-%m-%d")
 
 def advanced_vendor_parser(text):
-    """Ermittelt den Verkäufer mittels Fix-Keywords, Kontext-Regeln oder Adress-Scoring (Exkludiert Empfängerdaten)"""
-    
-    # [A] Fix-Keywords (Robuste Suche durch komplette Leerzeichenentfer늄)
+    """판매처(Verkäufer) 추출 알고리즘 (수신자 데이터 제외 고도화 버전)"""
     clean_text = re.sub(r'\s+', '', text.lower())
     
+    # [A] Fix-Keywords 필터
     if "amazon" in clean_text: return "Amazon"
     elif "tesla" in clean_text or "supercharger" in clean_text: return "Tesla"
     elif "santander" in clean_text: return "Santander"
     elif any(kw in clean_text for kw in ["stadtmobil", "rheinruhr", "rhein-ruhr"]): return "Stadtmobil"
     elif "dpd" in clean_text: return "DPD"
     elif "flaschenpost" in clean_text: return "Flaschenpost"
-    elif "abrsteuer" in clean_text: return "ABR Steuerberatung" # ABR 세무법인 선제 방어
+    elif "abrsteuer" in clean_text: return "ABR Steuerberatung"
     elif any(kw in clean_text for kw in ["shell", "aral", "totalenergies"]): return "Tankstelle"
 
-    # [B] Kontext-Regeln (z.B. "Verkauft von WEPA eCommerce GmbH")
+    # [B] 문맥 패턴
     context_match1 = re.search(r"verkauft\s+von\s+([A-Za-z0-9\s\.\&\-\_]+(GmbH|AG|GbR|KG|Inc|Ltd|SE)?)", text, re.IGNORECASE)
     if context_match1:
         vendor_name = context_match1.group(1).strip().split('\n')[0].strip()
@@ -71,7 +87,7 @@ def advanced_vendor_parser(text):
         vendor_name = context_match2.group(1).strip().split('\n')[0].strip()
         return re.sub(r'[:;,]+$', '', vendor_name).strip()
 
-    # [C] Adress-Scoring (Empfänger-Ausschluss-Logik)
+    # [C] 독일 주소지 스코어링 + 수신자(나의 정보) 블랙리스트
     lines = text.split('\n')
     for i, line in enumerate(lines):
         plz_match = re.search(r"\b\d{5}\s+[A-Za-zÄÖÜäöüß]+", line)
@@ -81,75 +97,57 @@ def advanced_vendor_parser(text):
             if i > 1: candidates.append(lines[i-2].strip())
             candidates.append(line.strip())
             
-            # Prio 1: 세무법인 및 일반 법인격(GmbH, SE, AG, KG) 매칭 검사
             for cand in candidates:
                 cand_low = cand.lower()
-                
-                # 🚨 무조건 패스해야 하는 수신자(나의 정보) 블랙리스트 필터링
+                # 수신자 정보 스킵
                 if "park impex" in cand_low or "daniel park" in cand_low or "jong-ho park" in cand_low:
-                    continue # 본인 정보가 적힌 주소 라인은 무시하고 다음 주소 검색으로 넘어감
+                    continue
                 
-                # 세무사 사무실 전용 키워드나 법인격 단어가 포함되어 있는지 검사
                 if "steuer" in cand_low or "gmbh" in cand_low or "ag" in cand_low or "kg" in cand_low or re.search(r"\bse\b", cand_low):
-                    # 법인명 형태만 깔끔하게 정규식 캡처
                     company_match = re.search(r"([A-Za-z0-9\&\-\_\s]+(?:GmbH|AG|GbR|KG|SE|e\.K\.))", cand)
                     if company_match:
                         extracted_name = company_match.group(1).strip()
-                        # 추출된 이름이 혹시나 내 회사명이 아닌지 교차 검증
-                        if "park impex" not in extracted_name.lower():
-                            return extracted_name
-                    
-                    if len(cand) < 50:
-                        return cand
+                        if "park impex" not in extracted_name.lower(): return extracted_name
+                    if len(cand) < 50: return cand
 
-            # Prio 2: 법인격이 없지만 도로명 주소 윗줄을 가져오는 경우
             if i > 0 and len(lines[i-1].strip()) > 2:
                 potential_vendor = lines[i-1].strip()
                 potential_low = potential_vendor.lower()
-                
-                # 역시 수신자 데이터는 제외
-                if "park impex" in potential_low or "daniel park" in potential_low:
-                    continue
-                    
+                if "park impex" in potential_low or "daniel park" in potential_low: continue
                 if re.search(r"(str|weg|straße|platz)\b", potential_low) and i > 1:
                     potential_vendor = lines[i-2].strip()
-                
                 if len(potential_vendor) < 40 and "park impex" not in potential_vendor.lower():
                     return potential_vendor
 
     return "Unbekannt"
 
 def parse_financial_amounts(text):
-    """Extrahiert Bruttobetrag und berechnet/extrahiert 19% MwSt"""
+    """Brutto 및 MwSt 19% 금액 추출 및 상호 교차 검증"""
     text_lower = text.lower()
     total_amount = 0.0
     mwst_19 = 0.0
 
-    # 1. Strikte MwSt-Isolierung vorab
+    # 1. MwSt 19% 정규식 격리 (독일식 소수점 , 및 00,00 포맷 대응)
     mwst_match = re.search(r"(19%\s*(mwst|ust|mehrwertsteuer)|(mwst|ust)\s*19%)\s*:?\s*([\d\.]*,\d{2})", text_lower)
     if mwst_match:
-        try:
-            mwst_19 = float(mwst_match.group(4).replace(".", "").replace(",", "."))
-        except:
-            pass
+        try: mwst_19 = float(mwst_match.group(4).replace(".", "").replace(",", "."))
+        except: pass
 
-    # 2. Brutto extrahieren (Zeilen ohne "mwst"/"netto" bevorzugen)
+    # 2. Brutto 합계 금액 추출 (역순 라인 스캔)
     lines = text.split('\n')
     for line in reversed(lines):
         line_low = line.lower()
-        if any(k in line_low for k in ["total", "gesamtsumme", "endbetrag", "brutto", "rechnungsbetrag", "zu zahlen"]):
-            if "mwst" in line_low or "netto" in line_low or "ust" in line_low:
-                continue
+        if any(k in line_low for k in ["total", "gesamtsumme", "endbetrag", "brutto", "rechnungsbetrag", "zu zahlen", "summe"]):
+            if "mwst" in line_low or "netto" in line_low or "ust" in line_low: continue
             
             price_match = re.search(r"([\d\.]*,\d{2})", line)
             if price_match:
                 try:
                     total_amount = float(price_match.group(1).replace(".", "").replace(",", "."))
                     break
-                except:
-                    continue
+                except: continue
 
-    # 3. Logische Plausibilitätsprüfungen und Kreuzrechnungen
+    # 3. 보완 계산기 가동
     if total_amount == 0.0 and mwst_19 > 0:
         total_amount = round(mwst_19 * 119 / 19, 2)
     elif mwst_19 == 0.0 and total_amount > 0 and "19%" in text_lower:
@@ -157,52 +155,50 @@ def parse_financial_amounts(text):
 
     return total_amount, mwst_19
 
-# --- UI Implementierung (Streamlit Frontend) ---
+# --- UI 세팅 ---
 
-uploaded_files = st.file_uploader("Wählen Sie PDF-Rechnungen aus (Mehrfachauswahl möglich)", type=["pdf"], accept_multiple_files=True)
+# 이제 파일 업로더가 PDF뿐만 아니라 이미지 포맷(png, jpg, jpeg)도 허용합니다.
+uploaded_files = st.file_uploader("Wählen Sie Rechnungen (PDF oder Bild)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 
 if uploaded_files:
     receipt_data = []
-    
     st.subheader("Analyse-Protokoll")
     
-    for uploaded_file in uploaded_files:
-        file_bytes = uploaded_file.read()
-        raw_text = extract_text_from_pdf(file_bytes)
-        
-        # Daten-Parsing über das Kombi-Modul
-        detected_date = advanced_date_parser(raw_text)
-        vendor = advanced_vendor_parser(raw_text)
-        total, mwst_19 = parse_financial_amounts(raw_text)
-        
-        # ISO-Konvertierung des Datums (DD.MM.YYYY zu YYYY-MM-DD)
-        date_str = detected_date
-        if "." in detected_date:
-            try:
-                date_str = datetime.strptime(detected_date, "%d.%m.%Y").strftime("%Y-%m-%d")
-            except:
-                pass
-        
-        # 특수문자나 공백이 파일명에 악영향을 주지 않도록 가볍게 정제
-        vendor_clean = re.sub(r'[\\/*?:"<>|]', '', vendor).strip()
-        
-        # DATEV-konformer Dateiname: YYYY-MM-DD_Verkäufer_BetragEUR.pdf
-        proposed_name = f"{date_str}_{vendor_clean}_{total:.2f}EUR.pdf"
-        
-        st.success(f"✔ Erfolgreich: {uploaded_file.name} ➔ **{proposed_name}**")
-        
-        receipt_data.append({
-            "Rechnungsdatum": date_str,
-            "Verkäufer": vendor,
-            "Brutto (€)": total,
-            "MwSt 19% (€)": mwst_19,
-            "Netto (€)": round(total - mwst_19, 2),
-            "DATEV-Dateiname": proposed_name
-        })
-        
-    # Zusammenfassung und Tabellenanzeige
+    # 처리를 위해 스피너 작동
+    with st.spinner("Dokumente werden analysiert..."):
+        for uploaded_file in uploaded_files:
+            file_bytes = uploaded_file.read()
+            file_ext = uploaded_file.name.split('.')[-1].lower()
+            
+            # 파일 확장자에 따라 텍스트 추출 엔진 자동 스위칭
+            if file_ext == "pdf":
+                raw_text = extract_text_from_pdf(file_bytes)
+            else:
+                raw_text = extract_text_from_image(file_bytes)
+            
+            # 통합 공통 파싱 파이프라인 가동
+            detected_date = advanced_date_parser(raw_text)
+            vendor = advanced_vendor_parser(raw_text)
+            total, mwst_19 = parse_financial_amounts(raw_text)
+            
+            date_str = detected_date
+            if "." in detected_date:
+                try: date_str = datetime.strptime(detected_date, "%d.%m.%Y").strftime("%Y-%m-%d")
+                except: pass
+            
+            vendor_clean = re.sub(r'[\\/*?:"<>|]', '', vendor).strip()
+            proposed_name = f"{date_str}_{vendor_clean}_{total:.2f}EUR.{file_ext}"
+            
+            st.success(f"✔ {uploaded_file.name} ➔ **{proposed_name}**")
+            
+            receipt_data.append({
+                "Rechnungsdatum": date_str, "Verkäufer": vendor,
+                "Brutto (€)": total, "MwSt 19% (€)": mwst_19, "Netto (€)": round(total - mwst_19, 2),
+                "DATEV-Dateiname": proposed_name
+            })
+            
+    # 대시보드 테이블 요약 출력
     df = pd.DataFrame(receipt_data)
-    
     st.markdown("---")
     st.subheader("📊 Monatliche Auswertungsübersicht")
     
@@ -217,13 +213,10 @@ if uploaded_files:
     
     st.dataframe(df, use_container_width=True)
     
-    # Excel-Export mit Summenzeile vorbereiten
+    # 엑셀 다운로드 빌드
     total_row = {
-        "Rechnungsdatum": "GESAMT (Total)", 
-        "Verkäufer": "", 
-        "Brutto (€)": total_brutto, 
-        "MwSt 19% (€)": total_mwst, 
-        "Netto (€)": total_netto, 
+        "Rechnungsdatum": "GESAMT", "Verkäufer": "", 
+        "Brutto (€)": total_brutto, "MwSt 19% (€)": total_mwst, "Netto (€)": total_netto, 
         "DATEV-Dateiname": f"{len(df)} Belege"
     }
     df_excel = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
@@ -231,12 +224,10 @@ if uploaded_files:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_excel.to_excel(writer, index=False, sheet_name='Ausgaben')
-    processed_data = output.getvalue()
     
-    current_month = datetime.now().strftime("%Y-%m")
     st.download_button(
         label="📥 Monatsbericht als Excel (.xlsx) herunterladen",
-        data=processed_data,
-        file_name=f"Ausgabenbericht_{current_month}.xlsx",
+        data=output.getvalue(),
+        file_name=f"Ausgabenbericht_{datetime.now().strftime('%Y-%m')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
