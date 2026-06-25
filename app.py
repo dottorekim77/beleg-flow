@@ -46,9 +46,9 @@ def advanced_date_parser(text):
     return datetime.now().strftime("%Y-%m-%d")
 
 def advanced_vendor_parser(text):
-    """Ermittelt den Verkäufer mittels Fix-Keywords, Kontext-Regeln oder Adress-Scoring"""
+    """Ermittelt den Verkäufer mittels Fix-Keywords, Kontext-Regeln oder Adress-Scoring (Exkludiert Empfängerdaten)"""
     
-    # [A] Fix-Keywords (Robuste Suche durch komplette Leerzeichenentfernung)
+    # [A] Fix-Keywords (Robuste Suche durch komplette Leerzeichenentfer늄)
     clean_text = re.sub(r'\s+', '', text.lower())
     
     if "amazon" in clean_text: return "Amazon"
@@ -57,22 +57,21 @@ def advanced_vendor_parser(text):
     elif any(kw in clean_text for kw in ["stadtmobil", "rheinruhr", "rhein-ruhr"]): return "Stadtmobil"
     elif "dpd" in clean_text: return "DPD"
     elif "flaschenpost" in clean_text: return "Flaschenpost"
+    elif "abrsteuer" in clean_text: return "ABR Steuerberatung" # ABR 세무법인 선제 방어
     elif any(kw in clean_text for kw in ["shell", "aral", "totalenergies"]): return "Tankstelle"
 
     # [B] Kontext-Regeln (z.B. "Verkauft von WEPA eCommerce GmbH")
-    # 1. "Verkauft von" Muster
     context_match1 = re.search(r"verkauft\s+von\s+([A-Za-z0-9\s\.\&\-\_]+(GmbH|AG|GbR|KG|Inc|Ltd|SE)?)", text, re.IGNORECASE)
     if context_match1:
         vendor_name = context_match1.group(1).strip().split('\n')[0].strip()
         return re.sub(r'[:;,]+$', '', vendor_name).strip()
 
-    # 2. "Rechnung von" Muster
     context_match2 = re.search(r"rechnung\s+von\s+([A-Za-z0-9\s\.\&\-\_]+(GmbH|AG|GbR|KG|SE)?)", text, re.IGNORECASE)
     if context_match2:
         vendor_name = context_match2.group(1).strip().split('\n')[0].strip()
         return re.sub(r'[:;,]+$', '', vendor_name).strip()
 
-    # [C] Adress-Scoring (Sucht nach PLZ + Stadt und analysiert die Zeilen darüber)
+    # [C] Adress-Scoring (Empfänger-Ausschluss-Logik)
     lines = text.split('\n')
     for i, line in enumerate(lines):
         plz_match = re.search(r"\b\d{5}\s+[A-Za-zÄÖÜäöüß]+", line)
@@ -82,22 +81,40 @@ def advanced_vendor_parser(text):
             if i > 1: candidates.append(lines[i-2].strip())
             candidates.append(line.strip())
             
-            # Prio 1: Zeile enthält Rechtsform (GmbH, SE, AG, KG) -> Höchste Wahrscheinlichkeit für Firmennamen
+            # Prio 1: 세무법인 및 일반 법인격(GmbH, SE, AG, KG) 매칭 검사
             for cand in candidates:
                 cand_low = cand.lower()
-                if "gmbh" in cand_low or "ag" in cand_low or "kg" in cand_low or re.search(r"\bse\b", cand_low):
-                    company_match = re.search(r"([A-Za-z0-9\&\-\_\s]+(?:GmbH|AG|GbR|KG|SE))", cand)
+                
+                # 🚨 무조건 패스해야 하는 수신자(나의 정보) 블랙리스트 필터링
+                if "park impex" in cand_low or "daniel park" in cand_low or "jong-ho park" in cand_low:
+                    continue # 본인 정보가 적힌 주소 라인은 무시하고 다음 주소 검색으로 넘어감
+                
+                # 세무사 사무실 전용 키워드나 법인격 단어가 포함되어 있는지 검사
+                if "steuer" in cand_low or "gmbh" in cand_low or "ag" in cand_low or "kg" in cand_low or re.search(r"\bse\b", cand_low):
+                    # 법인명 형태만 깔끔하게 정규식 캡처
+                    company_match = re.search(r"([A-Za-z0-9\&\-\_\s]+(?:GmbH|AG|GbR|KG|SE|e\.K\.))", cand)
                     if company_match:
-                        return company_match.group(1).strip()
-                    return cand
+                        extracted_name = company_match.group(1).strip()
+                        # 추출된 이름이 혹시나 내 회사명이 아닌지 교차 검증
+                        if "park impex" not in extracted_name.lower():
+                            return extracted_name
+                    
+                    if len(cand) < 50:
+                        return cand
 
-            # Prio 2: Keine Rechtsform da, nimm die Zeile darüber, schließe aber reine Straßennamen aus
+            # Prio 2: 법인격이 없지만 도로명 주소 윗줄을 가져오는 경우
             if i > 0 and len(lines[i-1].strip()) > 2:
                 potential_vendor = lines[i-1].strip()
-                if re.search(r"(str|weg|straße|platz)\b", potential_vendor.lower()) and i > 1:
+                potential_low = potential_vendor.lower()
+                
+                # 역시 수신자 데이터는 제외
+                if "park impex" in potential_low or "daniel park" in potential_low:
+                    continue
+                    
+                if re.search(r"(str|weg|straße|platz)\b", potential_low) and i > 1:
                     potential_vendor = lines[i-2].strip()
                 
-                if len(potential_vendor) < 40:
+                if len(potential_vendor) < 40 and "park impex" not in potential_vendor.lower():
                     return potential_vendor
 
     return "Unbekannt"
