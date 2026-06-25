@@ -1,4 +1,5 @@
 streamlit
 pypdf
+easyocr
 pandas
 openpyxl
