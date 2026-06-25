@@ -4,22 +4,14 @@ from pypdf import PdfReader
 import io
 import re
 from datetime import datetime
-import numpy as np
 from PIL import Image
-import easyocr
+import pytesseract
 
-# 1. Streamlit Seiteneinstellungen
+# Streamlit Seiteneinstellungen
 st.set_page_config(page_title="DE Beleg-Parser Pro", page_icon="🧾", layout="centered")
 
-st.title("🧾 Automatische Belegabrechnung (PDF & Bild)")
-st.write("Laden Sie Ihre PDF-Rechnungen oder Bilddateien (PNG, JPG, JPEG) hoch. Das Tool extrahiert die Daten automatisch.")
-
-# EasyOCR Reader 초기화 (독일어와 영어 지정)
-@st.cache_resource
-def load_ocr_reader():
-    return easyocr.Reader(['de', 'en'], gpu=False)
-
-reader_ocr = load_ocr_reader()
+st.title("🧾 Automatische Belegabrechnung (Optimiert)")
+st.write("Unterstützt PDF-Rechnungen und Bilddateien (PNG, JPG). Konzipiert für maximale Stabilität und minimale Speichernutzung.")
 
 # --- 데이터 추출 핵심 함수 ---
 
@@ -36,14 +28,12 @@ def extract_text_from_pdf(file_bytes):
         return ""
 
 def extract_text_from_image(file_bytes):
-    """이미지 파일(PNG, JPG)에서 OCR로 텍스트 추출"""
+    """Tesseract OCR을 사용하여 이미지에서 텍스트 추출 (메모리 절약형)"""
     try:
         image = Image.open(io.BytesIO(file_bytes))
-        # EasyOCR 인식을 위해 넘파이 배열로 변환
-        image_np = np.array(image)
-        results = reader_ocr.readtext(image_np, detail=0)
-        # 인식된 모든 문장들을 줄바꿈으로 이어붙여 텍스트로 만듦
-        return "\n".join(results)
+        # 독일어(deu)와 영어(eng)를 조합하여 텍스트 인식
+        text = pytesseract.image_to_string(image, lang='deu+eng')
+        return text
     except Exception as e:
         return f"OCR Error: {e}"
 
@@ -99,7 +89,6 @@ def advanced_vendor_parser(text):
             
             for cand in candidates:
                 cand_low = cand.lower()
-                # 수신자 정보 스킵
                 if "park impex" in cand_low or "daniel park" in cand_low or "jong-ho park" in cand_low:
                     continue
                 
@@ -127,13 +116,11 @@ def parse_financial_amounts(text):
     total_amount = 0.0
     mwst_19 = 0.0
 
-    # 1. MwSt 19% 정규식 격리 (독일식 소수점 , 및 00,00 포맷 대응)
     mwst_match = re.search(r"(19%\s*(mwst|ust|mehrwertsteuer)|(mwst|ust)\s*19%)\s*:?\s*([\d\.]*,\d{2})", text_lower)
     if mwst_match:
         try: mwst_19 = float(mwst_match.group(4).replace(".", "").replace(",", "."))
         except: pass
 
-    # 2. Brutto 합계 금액 추출 (역순 라인 스캔)
     lines = text.split('\n')
     for line in reversed(lines):
         line_low = line.lower()
@@ -147,7 +134,6 @@ def parse_financial_amounts(text):
                     break
                 except: continue
 
-    # 3. 보완 계산기 가동
     if total_amount == 0.0 and mwst_19 > 0:
         total_amount = round(mwst_19 * 119 / 19, 2)
     elif mwst_19 == 0.0 and total_amount > 0 and "19%" in text_lower:
@@ -157,26 +143,21 @@ def parse_financial_amounts(text):
 
 # --- UI 세팅 ---
 
-# 이제 파일 업로더가 PDF뿐만 아니라 이미지 포맷(png, jpg, jpeg)도 허용합니다.
 uploaded_files = st.file_uploader("Wählen Sie Rechnungen (PDF oder Bild)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 
 if uploaded_files:
     receipt_data = []
-    st.subheader("Analyse-Protokoll")
     
-    # 처리를 위해 스피너 작동
-    with st.spinner("Dokumente werden analysiert..."):
+    with st.spinner("Dokumente werden verarbeitet..."):
         for uploaded_file in uploaded_files:
             file_bytes = uploaded_file.read()
             file_ext = uploaded_file.name.split('.')[-1].lower()
             
-            # 파일 확장자에 따라 텍스트 추출 엔진 자동 스위칭
             if file_ext == "pdf":
                 raw_text = extract_text_from_pdf(file_bytes)
             else:
                 raw_text = extract_text_from_image(file_bytes)
             
-            # 통합 공통 파싱 파이프라인 가동
             detected_date = advanced_date_parser(raw_text)
             vendor = advanced_vendor_parser(raw_text)
             total, mwst_19 = parse_financial_amounts(raw_text)
@@ -197,37 +178,18 @@ if uploaded_files:
                 "DATEV-Dateiname": proposed_name
             })
             
-    # 대시보드 테이블 요약 출력
-    df = pd.DataFrame(receipt_data)
-    st.markdown("---")
-    st.subheader("📊 Monatliche Auswertungsübersicht")
-    
-    total_brutto = df["Brutto (€)"].sum()
-    total_mwst = df["MwSt 19% (€)"].sum()
-    total_netto = df["Netto (€)"].sum()
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Gesamt Brutto", f"{total_brutto:,.2f} €")
-    col2.metric("Erstattbare MwSt (19%)", f"{total_mwst:,.2f} €")
-    col3.metric("Gesamt Netto", f"{total_netto:,.2f} €")
-    
-    st.dataframe(df, use_container_width=True)
-    
-    # 엑셀 다운로드 빌드
-    total_row = {
-        "Rechnungsdatum": "GESAMT", "Verkäufer": "", 
-        "Brutto (€)": total_brutto, "MwSt 19% (€)": total_mwst, "Netto (€)": total_netto, 
-        "DATEV-Dateiname": f"{len(df)} Belege"
-    }
-    df_excel = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
-    
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_excel.to_excel(writer, index=False, sheet_name='Ausgaben')
-    
-    st.download_button(
-        label="📥 Monatsbericht als Excel (.xlsx) herunterladen",
-        data=output.getvalue(),
-        file_name=f"Ausgabenbericht_{datetime.now().strftime('%Y-%m')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    if receipt_data:
+        df = pd.DataFrame(receipt_data)
+        st.markdown("---")
+        st.subheader("📊 Auswertungsübersicht")
+        
+        total_brutto = df["Brutto (€)"].sum()
+        total_mwst = df["MwSt 19% (€)"].sum()
+        total_netto = df["Netto (€)"].sum()
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Gesamt Brutto", f"{total_brutto:,.2f} €")
+        col2.metric("Erstattbare MwSt", f"{total_mwst:,.2f} €")
+        col3.metric("Gesamt Netto", f"{total_netto:,.2f} €")
+        
+        st.dataframe(df, use_container_width=True)
