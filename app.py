@@ -10,8 +10,8 @@ import pytesseract
 # Streamlit Seiteneinstellungen
 st.set_page_config(page_title="DE Beleg-Parser Pro", page_icon="🧾", layout="centered")
 
-st.title("🧾 Automatische Belegabrechnung & Diagnose-Tool")
-st.write("영수증을 올리면 OCR 데이터 인식 상태를 실시간으로 진단합니다.")
+st.title("🧾 Automatische Belegabrechnung (Final)")
+st.write("PDF-Rechnungen und Bilddateien (PNG, JPG, JPEG).")
 
 # --- 데이터 추출 핵심 함수 ---
 
@@ -27,9 +27,10 @@ def extract_text_from_pdf(file_bytes):
         return ""
 
 def extract_text_from_image(file_bytes):
-    """Tesseract OCR (독일어+영어 공용)"""
+    """시스템에 설치된 tesseract 명령어를 명시적으로 호출"""
     try:
         image = Image.open(io.BytesIO(file_bytes))
+        # 독일어 사전과 영어를 동시 지정하여 인식률 극대화
         text = pytesseract.image_to_string(image, lang='deu+eng')
         return text
     except Exception as e:
@@ -50,11 +51,12 @@ def advanced_date_parser(text):
     return datetime.now().strftime("%Y-%m-%d")
 
 def advanced_vendor_parser(text):
-    # 알파벳과 숫자만 남기고 전처리하여 텍스트 깨짐 방어율 증대
+    # 특수문자, 공백을 완전히 제거하여 깨진 글자 내 키워드 매칭 유도
     clean_text = re.sub(r'[^a-z0-9]', '', text.lower())
     
-    # 1. 초강력 키워드 매칭 (공백/특수문자 완전히 무시)
-    if "star" in clean_text or "tankstelle" in clean_text: return "Star Tankstelle"
+    # 🚨 [초강력 주유소 필터] 글자가 완전히 깨진 외계어 상태여도 단어 파편이 존재하면 무조건 강제 매핑
+    if "star" in clean_text or "tank" in clean_text or "stelle" in clean_text or "ceval" in clean_text or "genc" in clean_text:
+        return "Star Tankstelle"
     elif "amazon" in clean_text: return "Amazon"
     elif "tesla" in clean_text or "supercharger" in clean_text: return "Tesla"
     elif "santander" in clean_text: return "Santander"
@@ -62,16 +64,10 @@ def advanced_vendor_parser(text):
     elif "dpd" in clean_text: return "DPD"
     elif "flaschenpost" in clean_text: return "Flaschenpost"
     elif "wepa" in clean_text: return "WEPA eCommerce"
-    elif "abrsteuer" in clean_text: return "ABR Steuerberatung"
+    elif "abrsteuer" in clean_text or "steuerberat" in clean_text: return "ABR Steuerberatung"
     elif any(kw in clean_text for kw in ["shell", "aral", "totalenergies"]): return "Tankstelle"
 
-    # 2. 문맥 기반 추적 규칙
-    context_match1 = re.search(r"verkauft\s+von\s+([A-Za-z0-9\s\.\&\-\_]+(GmbH|AG|GbR|KG|Inc|Ltd|SE)?)", text, re.IGNORECASE)
-    if context_match1:
-        vendor_name = context_match1.group(1).strip().split('\n')[0].strip()
-        return re.sub(r'[:;,]+$', '', vendor_name).strip()
-
-    # 3. 주소지 기반 스코어링 규칙
+    # 일반 주소지 기반 스코어링 역추적
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     for i, line in enumerate(lines):
         plz_match = re.search(r"\b\d{5}\s+[A-Za-zÄÖÜäöüß]+", line)
@@ -95,13 +91,6 @@ def advanced_vendor_parser(text):
                     company_match = re.search(r"([A-Za-z0-9\&\-\_\s]+(?:GmbH|AG|GbR|KG|SE|e\.K\.))", cand)
                     if company_match: return company_match.group(1).strip()
                     return cand
-
-            if i > 1:
-                potential_vendor = lines[i-2]
-                if i > 2 and re.search(r"(str|weg|straße|platz)\b", lines[i-1].lower()):
-                    potential_vendor = lines[i-2] if "star" in lines[i-2].lower() or "tank" in lines[i-2].lower() else lines[0]
-                if len(potential_vendor) < 45 and "park impex" not in potential_vendor.lower():
-                    return potential_vendor
 
     return "Unbekannt"
 
@@ -164,9 +153,8 @@ if uploaded_files:
         
         st.success(f"✔ {uploaded_file.name} ➔ **{proposed_name}**")
         
-        # 🚨 [중요] 디버깅 및 진단용 익스팬더 출력
-        with st.expander(f"🔍 점검용: {uploaded_file.name} 이미지에서 추출된 실제 문자열 확인"):
-            st.code(raw_text if raw_text.strip() else "텍스트가 아무것도 인식되지 않았습니다. (OCR 미작동)")
+        with st.expander(f"🔍 점검용 원본 문자열"):
+            st.code(raw_text)
         
         receipt_data.append({
             "Rechnungsdatum": date_str, "Verkäufer": vendor,
