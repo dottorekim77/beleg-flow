@@ -4,9 +4,9 @@ import io
 import re
 from datetime import datetime
 
-st.set_page_config(page_title="Datum Tester", layout="centered")
-st.title("🔍 Rechnungsdatum 정확도 테스트")
-st.write("PDF를 올리면 내부에서 감지된 모든 날짜와, 최종 선택된 Rechnungsdatum을 보여줍니다.")
+st.set_page_config(page_title="Verkäufer Pro Tester", layout="centered")
+st.title("🔬 [2단계] 판매처(Verkäufer) 이름 정밀 검증")
+st.write("지정 키워드 매칭과 'Verkauft von' 문맥 분석 알고리즘이 동시에 작동합니다.")
 
 def extract_text_from_pdf(file_bytes):
     try:
@@ -17,58 +17,79 @@ def extract_text_from_pdf(file_bytes):
             text += page.extract_text() or ""
         return text
     except Exception as e:
-        return f"Error reading PDF: {e}"
+        return ""
 
-def advanced_date_parser(text):
-    text_lines = text.split('\n')
+def advanced_vendor_parser(text):
+    # 1차 가공: 대소문자 무시 및 공백 완전 제거 (텍스트 깨짐 대응용)
+    clean_text = re.sub(r'\s+', '', text.lower())
     
-    # 1단계: 독일어 Rechnungsdatum 관련 핵심 키워드 주변 집중 탐색
-    # (예: Rechnungsdatum: 25.06.2026, Datum v. 12.05.2026 등)
-    date_keywords = ["rechnungsdatum", "leistungsdatum", "belegdatum", "datum vom", "datum:", "ausstellungsdatum"]
+    # [방식 A] 고정 키워드 매칭 (내가 자주 쓰는 주요 거래처)
+    if any(kw in clean_text for kw in ["tesla", "supercharger", "tsla"]):
+        return "Tesla", "고정 키워드 매칭 (Tesla)"
+    elif "amazon" in clean_text:
+        return "Amazon", "고정 키워드 매칭 (Amazon)"
+    elif "santander" in clean_text:
+        return "Santander", "고정 키워드 매칭 (Santander)"
+    elif any(kw in clean_text for kw in ["stadtmobil", "rheinruhr", "rhein-ruhr"]):
+        return "Stadtmobil", "고정 키워드 매칭 (Stadtmobil)"
+    elif any(kw in clean_text for kw in ["shell", "aral", "totalenergies"]):
+        return "Tankstelle", "고정 키워드 매칭 (Tankstelle)"
+
+    # [방식 B] 문맥 추적 로직 (새로운 회사 이름 동적 추출)
+    # 줄바꿈(\n)을 유지한 상태의 원본 텍스트에서 검색합니다.
     
-    for line in text_lines:
-        line_low = line.lower()
-        if any(kw in line_low for kw in date_keywords):
-            # 키워드가 있는 라인에서 독일식(DD.MM.YYYY) 또는 ISO(YYYY-MM-DD) 날짜 패턴 검색
-            match = re.search(r"(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})", line)
-            if match:
-                return match.group(1), f"정밀 매칭 성공 (키워드 라인: '{line.strip()}')"
+    # 1. "Verkauft von [회사명]" 패턴 (GmbH, AG 등 독일 법인격 접미사 포함 추적)
+    context_match1 = re.search(r"verkauft\s+von\s+([A-Za-z0-9\s\.\&\-\_]+(GmbH|AG|GbR|KG|Inc|Ltd)?)", text, re.IGNORECASE)
+    if context_match1:
+        vendor_name = context_match1.group(1).strip().split('\n')[0].strip()
+        # 불필요한 마침표나 특수문자 마감 정리
+        vendor_name = re.sub(r'[:;,]+$', '', vendor_name).strip()
+        return vendor_name, f"문맥 추적 성공 ('Verkauft von' 패턴)"
 
-    # 2단계: 키워드 매칭 실패 시, 텍스트 전체에서 등장하는 모든 날짜 후보군 수집
-    all_dates = re.findall(r"(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})", text)
-    
-    if all_dates:
-        # 보통 영수증 발행일은 문서 상단(텍스트 처음)에 나올 확률이 높으므로 첫 번째 날짜 선택
-        return all_dates[0], f"일반 매칭 (텍스트 내 첫 번째 날짜, 총 {len(all_dates)}개 발견)"
+    # 2. "Rechnung von [회사명]" 패턴
+    context_match2 = re.search(r"rechnung\s+von\s+([A-Za-z0-9\s\.\&\-\_]+(GmbH|AG|GbR|KG)?)", text, re.IGNORECASE)
+    if context_match2:
+        vendor_name = context_match2.group(1).strip().split('\n')[0].strip()
+        vendor_name = re.sub(r'[:;,]+$', '', vendor_name).strip()
+        return vendor_name, f"문맥 추적 성공 ('Rechnung von' 패턴)"
 
-    # 3단계: 아무 날짜도 못 찾은 경우 기본값
-    return "0000-00-00", "날짜 패턴을 전혀 찾지 못함"
+    # 3. "Dienstleister: [회사명]" 또는 "Aussteller: [회사명]" 패턴
+    context_match3 = re.search(r"(dienstleister|aussteller|unternehmer)\s*:?\s*([A-Za-z0-9\s\.\&\-\_]+(GmbH|AG|GbR|KG)?)", text, re.IGNORECASE)
+    if context_match3:
+        vendor_name = context_match3.group(2).strip().split('\n')[0].strip()
+        return vendor_name, f"문맥 추적 성공 ('{context_match3.group(1)}' 패턴)"
 
-uploaded_files = st.file_uploader("테스트할 PDF 영수증을 올려주세요", type=["pdf"], accept_multiple_files=True)
+    return "Unbekannt", "모든 규칙 실패 (지정 키워드 없음 / 문맥 발견 못함)"
+
+
+uploaded_files = st.file_uploader("검증할 PDF 영수증을 올려주세요", type=["pdf"], accept_multiple_files=True)
 
 if uploaded_files:
     for uploaded_file in uploaded_files:
         st.markdown(f"### 📄 파일명: {uploaded_file.name}")
         
-        # 텍스트 추출
         raw_text = extract_text_from_pdf(uploaded_file.read())
+        vendor, debug_msg = advanced_vendor_parser(raw_text)
         
-        # 날짜 추출 로직 가동
-        detected_date, debug_msg = advanced_date_parser(raw_text)
+        # 결과 표시
+        if vendor != "Unbekannt":
+            st.success(f"**인식된 판매처(Verkäufer):** `{vendor}`")
+        else:
+            st.error(f"**인식된 판매처(Verkäufer):** `{vendor}`")
+            
+        st.caption(f"🔍 **알고리즘 진단:** {debug_msg}")
         
-        # 독일식 날짜 표준화
-        final_date = detected_date
-        if "." in detected_date:
-            try:
-                final_date = datetime.strptime(detected_date, "%d.%m.%Y").strftime("%Y-%m-%d")
-            except:
-                pass
+        # 텍스트에서 'verkauft von' 근처에 뭐가 있는지 보여주는 미니 디버깅 창
+        with st.expander("텍스트 원본에서 'von' 또는 'Rechnung' 주변 단어 훔쳐보기"):
+            # 입력된 텍스트에서 키워드가 있는 주변 300자만 잘라서 보여줌
+            found = False
+            for target in ["von", "rechnung", "tesla", "stadtmobil"]:
+                idx = raw_text.lower().find(target)
+                if idx != -1:
+                    st.text(f"... {raw_text[max(0, idx-50):min(len(raw_text), idx+150)]} ...")
+                    found = True
+                    break
+            if not found:
+                st.text("주요 키워드가 텍스트 내에 존재하지 않습니다.")
                 
-        # 결과 출력
-        st.info(f"**최종 추출된 날짜:** `{final_date}`")
-        st.caption(f"**진단 메시지:** {debug_msg}")
-        
-        # 텍스트가 어떻게 추출되었는지 직접 눈으로 확인하기 위한 디버깅 창
-        with st.expander("이 PDF에서 추출된 실제 텍스트 원본 보기"):
-            st.text(raw_text)
         st.markdown("---")
