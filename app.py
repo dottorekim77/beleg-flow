@@ -1,14 +1,12 @@
 import streamlit as st
-import pandas as pd
 from pypdf import PdfReader
 import io
 import re
 from datetime import datetime
 
-st.set_page_config(page_title="DE Beleg-Parser Pro", page_icon="🧾", layout="centered")
-
-st.title("🧾 Automatische Belegabrechnung (Optimiert)")
-st.write("Verbesserte Version mit strikter Brutto/MwSt-Trennung und intelligenter Händlererkennung.")
+st.set_page_config(page_title="Datum Tester", layout="centered")
+st.title("🔍 Rechnungsdatum 정확도 테스트")
+st.write("PDF를 올리면 내부에서 감지된 모든 날짜와, 최종 선택된 Rechnungsdatum을 보여줍니다.")
 
 def extract_text_from_pdf(file_bytes):
     try:
@@ -18,86 +16,59 @@ def extract_text_from_pdf(file_bytes):
         for page in reader.pages:
             text += page.extract_text() or ""
         return text
-    except Exception:
-        return ""
+    except Exception as e:
+        return f"Error reading PDF: {e}"
 
-def parse_receipt_info(text):
-    text_lower = text.lower()
-    # 공백을 완전 제거한 텍스트 (텍스트가 깨져서 추출되는 경우 대비)
-    text_no_spaces = re.sub(r'\s+', '', text_lower)
+def advanced_date_parser(text):
+    text_lines = text.split('\n')
     
-    # 1. 공급처(Verkäufer) 찾기 고도화 (공백 없는 매칭 추가)
-    vendor = "Unbekannt"
-    if "amazon" in text_no_spaces:
-        vendor = "Amazon"
-    elif "tesla" in text_no_spaces or "supercharger" in text_no_spaces:
-        vendor = "Tesla"
-    elif "santander" in text_no_spaces:
-        vendor = "Santander"
-    elif "stadtmobil" in text_no_spaces or "rheinruhr" in text_no_spaces:
-        vendor = "Stadtmobil"
-    elif "shell" in text_no_spaces or "aral" in text_no_spaces or "totalenergies" in text_no_spaces:
-        vendor = "Tankstelle"
-
-    # 2. 날짜 추출
-    date_match = re.search(r"(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})", text)
-    date_str = date_match.group(1) if date_match else datetime.now().strftime("%Y-%m-%d")
-    if "." in date_str:
-        try: date_str = datetime.strptime(date_str, "%d.%m.%Y").strftime("%Y-%m-%d")
-        except: pass
-
-    # 3. 19% MwSt 추출 (Brutto보다 먼저 찾아서 격리하기)
-    mwst_19 = 0.0
-    mwst_match = re.search(r"(19%\s*(mwst|ust|mehrwertsteuer)|(mwst|ust)\s*19%)\s*:?\s*([\d\.]*,\d{2})", text_lower)
-    if mwst_match:
-        try:
-            mwst_19 = float(mwst_match.group(4).replace(".", "").replace(",", "."))
-        except:
-            pass
-
-    # 4. Bruttobetrag 추출 (MwSt 금액과 중복 방지)
-    total_amount = 0.0
-    # 영수증 라인별로 분석하여 MwSt나 Netto라는 단어가 '없는' 최종 합계 라인을 추적
-    lines = text.split('\n')
-    for line in reversed(lines): # 보통 합계는 맨 아래에 있으므로 역순 탐색
+    # 1단계: 독일어 Rechnungsdatum 관련 핵심 키워드 주변 집중 탐색
+    # (예: Rechnungsdatum: 25.06.2026, Datum v. 12.05.2026 등)
+    date_keywords = ["rechnungsdatum", "leistungsdatum", "belegdatum", "datum vom", "datum:", "ausstellungsdatum"]
+    
+    for line in text_lines:
         line_low = line.lower()
-        if any(k in line_low for k in ["total", "gesamtsumme", "endbetrag", "brutto", "rechnungsbetrag", "zu zahlen"]):
-            # 이 라인에 mwst나 netto가 같이 있다면 패스 (오인 방지)
-            if "mwst" in line_low or "netto" in line_low or "ust" in line_low:
-                continue
-            
-            price_match = re.search(r"([\d\.]*,\d{2})", line)
-            if price_match:
-                try:
-                    total_amount = float(price_match.group(1).replace(".", "").replace(",", "."))
-                    break
-                except:
-                    continue
+        if any(kw in line_low for kw in date_keywords):
+            # 키워드가 있는 라인에서 독일식(DD.MM.YYYY) 또는 ISO(YYYY-MM-DD) 날짜 패턴 검색
+            match = re.search(r"(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})", line)
+            if match:
+                return match.group(1), f"정밀 매칭 성공 (키워드 라인: '{line.strip()}')"
 
-    # 끝까지 Brutto를 못 찾았고 MwSt만 있다면 역산해서 채우기
-    if total_amount == 0.0 and mwst_19 > 0:
-        total_amount = round(mwst_19 * 119 / 19, 2)
-    # 반대로 Brutto는 찾았는데 MwSt를 못 찾았다면 역산
-    elif mwst_19 == 0.0 and total_amount > 0 and "19%" in text_lower:
-        mwst_19 = round(total_amount * 19 / 119, 2)
+    # 2단계: 키워드 매칭 실패 시, 텍스트 전체에서 등장하는 모든 날짜 후보군 수집
+    all_dates = re.findall(r"(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})", text)
+    
+    if all_dates:
+        # 보통 영수증 발행일은 문서 상단(텍스트 처음)에 나올 확률이 높으므로 첫 번째 날짜 선택
+        return all_dates[0], f"일반 매칭 (텍스트 내 첫 번째 날짜, 총 {len(all_dates)}개 발견)"
 
-    return date_str, vendor, total_amount, mwst_19
+    # 3단계: 아무 날짜도 못 찾은 경우 기본값
+    return "0000-00-00", "날짜 패턴을 전혀 찾지 못함"
 
-uploaded_files = st.file_uploader("PDF-Rechnungen hochladen", type=["pdf"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("테스트할 PDF 영수증을 올려주세요", type=["pdf"], accept_multiple_files=True)
 
 if uploaded_files:
-    receipt_data = []
     for uploaded_file in uploaded_files:
-        text = extract_text_from_pdf(uploaded_file.read())
-        date_str, vendor, total, mwst_19 = parse_receipt_info(text)
-        proposed_name = f"{date_str}_{vendor}_{total:.2f}EUR.pdf"
+        st.markdown(f"### 📄 파일명: {uploaded_file.name}")
         
-        st.write(f"➔ {proposed_name}")
-        receipt_data.append({
-            "Rechnungsdatum": date_str, "Verkäufer": vendor, 
-            "Brutto (€)": total, "MwSt 19% (€)": mwst_19, 
-            "Netto (€)": round(total - mwst_19, 2), "DATEV-Dateiname": proposed_name
-        })
-    
-    df = pd.DataFrame(receipt_data)
-    st.dataframe(df)
+        # 텍스트 추출
+        raw_text = extract_text_from_pdf(uploaded_file.read())
+        
+        # 날짜 추출 로직 가동
+        detected_date, debug_msg = advanced_date_parser(raw_text)
+        
+        # 독일식 날짜 표준화
+        final_date = detected_date
+        if "." in detected_date:
+            try:
+                final_date = datetime.strptime(detected_date, "%d.%m.%Y").strftime("%Y-%m-%d")
+            except:
+                pass
+                
+        # 결과 출력
+        st.info(f"**최종 추출된 날짜:** `{final_date}`")
+        st.caption(f"**진단 메시지:** {debug_msg}")
+        
+        # 텍스트가 어떻게 추출되었는지 직접 눈으로 확인하기 위한 디버깅 창
+        with st.expander("이 PDF에서 추출된 실제 텍스트 원본 보기"):
+            st.text(raw_text)
+        st.markdown("---")
