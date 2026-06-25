@@ -3,3 +3,5 @@ pytesseract
 openpyxl
 pillow
 pandas==3.0.3
+opencv-python-headless
+numpy
