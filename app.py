@@ -139,33 +139,94 @@ def advanced_vendor_parser(text):
     return "Unbekannt"
 
 def parse_financial_amounts(text):
-    text_lower = text.lower()
-    total_amount = 0.0
+    """
+    텍스트 내 모든 금액 후보를 추출한 뒤,
+    독일 부가세 19% 기준 (Brutto = Netto + MwSt) 수식이 성립하는 최적의 조합을 찾아내는 알고리즘
+    """
+    # 1. 금액 형태의 숫자 모두 추출 (예: 74,24 또는 1.500,50 등)
+    # 공백이나 깨진 문자 사이의 숫자 매칭을 위해 정규식 최적화
+    raw_amounts = re.findall(r"\b\d+(?:[\.,]\d{2})\b", text)
+    
+    candidates = []
+    for amt in raw_amounts:
+        try:
+            # 독일식 금액 표기법(,를 .로) 변환 처리
+            # 이미 .인 경우는 소수점으로 처리되도록 유연하게 파싱
+            clean_amt = amt.replace(".", "").replace(",", ".")
+            val = float(clean_amt)
+            if val > 0.0 and val not in candidates:
+                candidates.append(val)
+        except ValueError:
+            continue
+
+    # 금액이 큰 순서대로 정렬 (내림차순)
+    candidates = sorted(candidates, reverse=True)
+
+    # 기본값 설정
+    total_brutto = 0.0
     mwst_19 = 0.0
 
-    mwst_match = re.search(r"(19%\s*(mwst|ust|mehrwertsteuer)|(mwst|ust)\s*19%)\s*:?\s*([\d\.]*,\d{2})", text_lower)
-    if mwst_match:
-        try: mwst_19 = float(mwst_match.group(4).replace(".", "").replace(",", "."))
-        except: pass
+    # 2. 조합 검증 (수학적 앙상블 매칭)
+    # 후보 숫자가 최소 2개 이상일 때 매칭 시작
+    if len(candidates) >= 2:
+        match_found = False
+        
+        # 3개 숫자가 다 존재하여 B = N + M 구조가 완벽히 들어맞는 경우 추적
+        for i in range(len(candidates)):
+            for j in range(i + 1, len(candidates)):
+                for k in range(j + 1, len(candidates)):
+                    B = candidates[i]  # 가장 큰 값 (Brutto 후보)
+                    N = candidates[j]  # 중간 값 (Netto 후보)
+                    M = candidates[k]  # 가장 작은 값 (MwSt 후보)
+                    
+                    # 조건 1: Brutto = Netto + MwSt (허용 오차 0.05 EUR)
+                    if abs(B - (N + M)) < 0.05:
+                        # 조건 2: MwSt가 Netto의 약 19%이거나 Brutto의 19/119 인지 검증
+                        if abs(M - (N * 0.19)) < 0.5 or abs(M - (B * 19 / 119)) < 0.5:
+                            total_brutto = B
+                            mwst_19 = M
+                            match_found = True
+                            break
+                if match_found: break
+            if match_found: break
 
-    lines = text.split('\n')
-    for line in reversed(lines):
-        line_low = line.lower()
-        if any(k in line_low for k in ["total", "gesamtsumme", "endbetrag", "brutto", "rechnungsbetrag", "zu zahlen", "summe", "eur"]):
-            if "mwst" in line_low or "netto" in line_low or "ust" in line_low: continue
-            price_match = re.search(r"([\d\.]*,\d{2})", line)
-            if price_match:
-                try:
-                    total_amount = float(price_match.group(1).replace(".", "").replace(",", "."))
-                    break
-                except: continue
+        # 만약 영수증에 MwSt(세금) 금액이 명시적으로 안 적혀있고, Brutto와 Netto만 찍혀있는 경우 (2개 숫자 조합)
+        if not match_found and len(candidates) >= 2:
+            for i in range(len(candidates)):
+                for j in range(i + 1, len(candidates)):
+                    B = candidates[i]
+                    N = candidates[j]
+                    
+                    # B와 N이 각각 119%와 100%의 관계를 가지는지 검증
+                    if abs(B - (N * 1.19)) < 0.05:
+                        total_brutto = B
+                        mwst_19 = round(B - N, 2)
+                        match_found = True
+                        break
 
-    if total_amount == 0.0 and mwst_19 > 0:
-        total_amount = round(mwst_19 * 119 / 19, 2)
-    elif mwst_19 == 0.0 and total_amount > 0 and "19%" in text_lower:
-        mwst_19 = round(total_amount * 19 / 119, 2)
+    # 3. 모든 조합이 실패했을 때의 최종 폴백 (기존 텍스트 역추적 알고리즘)
+    if total_brutto == 0.0:
+        lines = text.split('\n')
+        for line in reversed(lines):
+            line_low = line.lower()
+            if any(k in line_low for k in ["total", "gesamtsumme", "endbetrag", "brutto", "rechnungsbetrag", "eur"]):
+                if any(x in line_low for x in ["mwst", "netto", "ust"]): continue
+                price_match = re.search(r"([\d\.]*,\d{2})", line)
+                if price_match:
+                    try:
+                        total_brutto = float(price_match.group(1).replace(".", "").replace(",", "."))
+                        break
+                    except: continue
+        
+        # 부가세 폴백 매칭
+        mwst_match = re.search(r"(19%\s*(mwst|ust)|(mwst|ust)\s*19%)\s*:?\s*([\d\.]*,\d{2})", text.lower())
+        if mwst_match:
+            try: mwst_19 = float(mwst_match.group(4).replace(".", "").replace(",", "."))
+            except: pass
+        elif total_brutto > 0.0 and "19%" in text.lower():
+            mwst_19 = round(total_brutto * 19 / 119, 2)
 
-    return total_amount, mwst_19
+    return total_brutto, mwst_19
 
 # --- UI 레이아웃 구동 ---
 uploaded_files = st.file_uploader("Wählen Sie Rechnungen (PDF oder Bild)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
