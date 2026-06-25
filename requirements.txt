@@ -1,3 +1,4 @@
 pypdf
-easyocr
+pytesseract
 openpyxl
+pillow
