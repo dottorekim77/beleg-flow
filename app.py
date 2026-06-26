@@ -28,7 +28,7 @@ def ask_gemini_vision_parser(file_bytes, mime_type):
     if not API_KEY:
         return "", "", "", 0.0
     try:
-        model = genai.GenerativeModel('models/gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         
         # 파일 바이너리를 Gemini가 이해할 수 있는 멀티모달 형태로 패킹
         file_part = {
