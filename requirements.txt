@@ -1,7 +1,8 @@
+streamlit
+pandas
 pypdf
-pytesseract
 openpyxl
 pillow
-pandas==3.0.3
+pytesseract
 opencv-python-headless
-numpy
+google-generativeai
