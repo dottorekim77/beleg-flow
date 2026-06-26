@@ -2,7 +2,4 @@ streamlit
 pandas
 pypdf
 openpyxl
-pillow
-pytesseract
-opencv-python-headless
 google-generativeai
