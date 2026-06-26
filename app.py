@@ -239,8 +239,85 @@ if uploaded_files:
             "DATEV-Dateiname": proposed_name
         })
         
-    if receipt_data:
+   if receipt_data:
         df = pd.DataFrame(receipt_data)
+        
+        # 💡 [요구사항 1] 표 번호가 0번이 아닌 1번부터 시작되도록 인덱스 보정
+        df.index = df.index + 1
+        df.index.name = "Nr."
+        
         st.markdown("---")
         st.subheader("📊 Auswertungsübersicht")
         st.dataframe(df, use_container_width=True)
+        
+        # --- 👑 스타일이 적용된 프리미엄 엑셀 내보내기 엔진 ---
+        import io
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        
+        # 메모리 버퍼 생성
+        openpyxl_buffer = io.BytesIO()
+        
+        # openpyxl 엔진을 사용하여 스타일 지정형 엑셀 파일 작성
+        with pd.ExcelWriter(openpyxl_buffer, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name="DATEV_Export", index=True)
+            
+            workbook = writer.book
+            worksheet = writer.sheets["DATEV_Export"]
+            
+            # 💡 [요구사항 3] 첫 줄(헤더) 스타일 셋업: 신뢰감을 주는 짙은 네이비 배경 + 흰색 두꺼운 글씨
+            header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+            header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+            header_alignment = Alignment(horizontal="center", vertical="center")
+            
+            # 깔끔한 테이블 그리드 라인 설정
+            thin_border = Border(
+                left=Side(style='thin', color='D9D9D9'),
+                right=Side(style='thin', color='D9D9D9'),
+                top=Side(style='thin', color='D9D9D9'),
+                bottom=Side(style='medium', color='1F4E78') # 헤더 하단은 강조선
+            )
+            data_border = Border(
+                left=Side(style='thin', color='E0E0E0'),
+                right=Side(style='thin', color='E0E0E0'),
+                top=Side(style='thin', color='E0E0E0'),
+                bottom=Side(style='thin', color='E0E0E0')
+            )
+            
+            # 헤더 스타일 반영
+            for col_num in range(1, worksheet.max_column + 1):
+                cell = worksheet.cell(row=1, column=col_num)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = header_alignment
+                cell.border = thin_border
+            
+            # 데이터 행 정렬 및 테두리 정리
+            for row in range(2, worksheet.max_row + 1):
+                for col in range(1, worksheet.max_column + 1):
+                    cell = worksheet.cell(row=row, column=col)
+                    cell.border = data_border
+                    # 표 번호(Nr.)와 날짜 컬럼은 가독성을 위해 가운데 정렬
+                    if col in [1, 2]:
+                        cell.alignment = Alignment(horizontal="center")
+                    # 금액 컬럼은 우측 정렬
+                    elif col in [4, 5, 6]:
+                        cell.alignment = Alignment(horizontal="right")
+            
+            # 💡 [요구사항 2] 셀 간격(열 너비) 자동 조절 알고리즘
+            for col in worksheet.columns:
+                max_len = 0
+                col_letter = col[0].column_letter # A, B, C와 같은 열 문자 추출
+                for cell in col:
+                    if cell.value is not None:
+                        # 문자열 최장 길이를 계산하여 동적 폭 산출
+                        max_len = max(max_len, len(str(cell.value)))
+                # 텍스트가 잘리지 않도록 좌우 여백(+4)을 부여하고, 최소 너비를 12로 강제 제한
+                worksheet.column_dimensions[col_letter].width = max(max_len + 4, 12)
+        
+        # Streamlit 화면에 프리미엄 엑셀 다운로드 버튼 배치
+        st.download_button(
+            label="📥 고급 스타일 엑셀 파일 다운로드 (.xlsx)",
+            data=openpyxl_buffer.getvalue(),
+            file_name=f"DATEV_Export_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
