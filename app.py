@@ -1,8 +1,8 @@
 """
-DE Beleg-Parser Pro AI  (v2.0-Gemini Vision)
+DE Beleg-Parser Pro AI  (v2.1-Gemini Vision)
 ─────────────────────────────────────────────
 독일 세무/관세 전표 AI 파싱 도구
-- Gemini 1.5 Flash Vision으로 PDF·이미지 원샷 파싱
+- Gemini 3.1 Flash-Lite Vision으로 PDF·이미지 원샷 파싱
 - DATEV 파일명 자동 생성 + 편집 가능 테이블
 - Excel / CSV 다운로드
 """
@@ -26,7 +26,7 @@ from openpyxl.styles import (
 # ══════════════════════════════════════════════════════════════════════════════
 PAGE_TITLE       = "DE Beleg-Parser Pro AI"
 PAGE_ICON        = "🧾"
-GEMINI_MODEL     = "models/gemini-1.5-flash"
+GEMINI_MODEL     = "gemini-3.1-flash-lite"   # 2027-05-07까지 지원되는 안정 모델
 FREE_TIER_DELAY  = 4.2          # 무료 API 쓰로틀링 (초)
 MWST_RATE        = 19 / 119     # 독일 부가세 19% 역산 계수
 
