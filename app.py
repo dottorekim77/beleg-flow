@@ -4,199 +4,85 @@ from pypdf import PdfReader
 import io
 import re
 from datetime import datetime
-from PIL import Image
-import pytesseract
-import cv2
-import numpy as np
 import time
 import google.generativeai as genai
 
 # 1. 레이아웃 와이드 스크린 지정
 st.set_page_config(page_title="DE Beleg-Parser Pro AI", page_icon="🧾", layout="wide")
-st.title("🧾 Kognitiver Beleg-Parser (v1.6-Gemini AI)")
-st.write("무료 Gemini 1.5 Flash API 결합형 영수증 번호 자동 탐지 및 스크롤 프리 엔진")
+st.title("🧾 Kognitiver Beleg-Parser (v1.7-Gemini Vision)")
+st.write("의존성 라이브러리를 제거하고 Gemini 정밀 시각(Vision) 엔진을 탑재한 영수증 번호 추출 시스템")
 
-# --- 1단계: Secrets 및 로컬 환경변수 통합 로드 ---
+# --- 1단계: Secrets 및 환경변수 로드 ---
 if "GEMINI_API_KEY" in st.secrets:
     API_KEY = st.secrets["GEMINI_API_KEY"]
 else:
-    # 로컬 테스트용 입력창 (Secrets 설정을 안 했을 경우 우회로)
     API_KEY = st.sidebar.text_input("Gemini API Key", type="password")
 
 if API_KEY:
     genai.configure(api_key=API_KEY)
 else:
-    st.sidebar.warning("⚠️ 구글 AI 스튜디오에서 발급받은 API Key를 Streamlit Secrets에 넣거나 왼쪽에 입력해 주세요. (무료 버전을 위해 필수)")
+    st.sidebar.warning("⚠️ 구글 AI 스튜디오에서 발급받은 API Key를 Streamlit Secrets에 넣거나 왼쪽에 입력해 주세요.")
 
-# --- 2단계: 컴퓨터 비전 이미지 전처리 엔진 ---
-def preprocess_image_for_ocr(file_bytes):
-    try:
-        nparr = np.frombuffer(file_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None: return None
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        return thresh
-    except Exception:
-        return None
-
-# --- 3단계: 텍스트 추출 엔진 (캐싱 레이어) ---
-@st.cache_data(show_spinner=False)
-def get_cached_ocr_text(file_name, file_bytes, is_pdf):
-    if is_pdf:
-        try:
-            pdf_file = io.BytesIO(file_bytes)
-            reader = PdfReader(pdf_file)
-            text = ""
-            for page in reader.pages:
-                text += page.extract_text() or ""
-            return text
-        except Exception:
-            return ""
-    else:
-        try:
-            processed_img = preprocess_image_for_ocr(file_bytes)
-            if processed_img is not None:
-                pil_img = Image.fromarray(processed_img)
-                text = pytesseract.image_to_string(pil_img, lang='deu+eng')
-                if len(text.strip()) < 10:
-                    text = pytesseract.image_to_string(Image.open(io.BytesIO(file_bytes)), lang='deu+eng')
-            else:
-                text = pytesseract.image_to_string(Image.open(io.BytesIO(file_bytes)), lang='deu+eng')
-            return text
-        except Exception as e:
-            return f"OCR Error: {e}"
-
-# --- 4단계: 💡 인공지능 기반 영수증 번호(Rechnungsnummer) 에이전트 ---
-def ask_gemini_beleg_nummer(ocr_text):
+# --- 2단계: 💡 Gemini 멀티모달(Vision) 영수증 번호 및 데이터 추출 엔진 ---
+def ask_gemini_vision_parser(file_bytes, mime_type):
     if not API_KEY:
-        return ""
+        return "", "", "", 0.0
     try:
-        # 가성비 및 무료 분당 할당량이 뛰어난 1.5 Flash 타겟팅
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        prompt = f"""
-        너는 독일 세무 회계 및 관세 전표 전문가야. 
-        아래 제공된 독일 영수증/인보이스의 OCR 텍스트 분석해서 오직 'Rechnungsnummer' 또는 'Belegnummer' (영수증 번호)만 식별해서 뱉어내야 해.
+        # 파일 바이너리를 Gemini가 이해할 수 있는 멀티모달 형태로 패킹
+        file_part = {
+            "mime_type": mime_type,
+            "data": file_bytes
+        }
+        
+        prompt = """
+        너는 독일 세무 회계 및 관세 전표 전문가야. 제공된 영수증/인보이스 문서를 시각적으로 정밀하게 분석해서 아래 4가지 정보만 정확히 찾아내줘.
+        
+        1. Rechnungsnummer (또는 Belegnummer, Invoice No. 영수증 일련번호)
+        2. Rechnungsdatum (발행일, YYYY-MM-DD 형식으로 변환할 것)
+        3. Verkäufer (발행 회사명/판매처 이름)
+        4. Bruttobetrag (총 합계 금액, 유로화 기호 없이 숫자만 기재, 예: 45.90)
 
-        [주의사항]
-        1. 인사말, 부가 설명, 'Rechnungsnummer:' 같은 접두사 절대 금지. 오직 일치하는 일련번호 문자열 딱 하나만 반환해.
-        2. Steuernummer(세무번호), Umsatzsteuer-ID(부가세번호), Kunden-Nr(고객번호), IBAN, 날짜 포맷과 절대 혼동하지 마.
-        3. 만약 도저히 영수증 번호로 보이지 않거나 텍스트가 깨져서 찾을 수 없다면, 아무 글자도 적지 말고 그냥 빈 문자열만 반환해.
+        [출력 포맷 규칙]
+        반드시 다른 설명 없이 아래 형식으로만 한 줄씩 출력해줘:
+        Beleg_Nr: [번호]
+        Datum: [YYYY-MM-DD]
+        Vendor: [회사명]
+        Total: [금액]
 
-        [영수증 OCR 텍스트]
-        {ocr_text}
+        만약 해당 항목을 도저히 찾을 수 없다면 빈칸으로 비워둬 (예: Beleg_Nr: )
         """
-        response = model.generate_content(prompt)
-        return response.text.strip()
-    except Exception:
-        return ""
+        
+        response = model.generate_content([file_part, prompt])
+        res_text = response.text
+        
+        # 결과 파싱
+        beleg_nr = ""
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        vendor = "Unbekannt"
+        total_val = 0.0
+        
+        for line in res_text.split('\n'):
+            if line.startswith("Beleg_Nr:"):
+                beleg_nr = line.replace("Beleg_Nr:", "").strip()
+            elif line.startswith("Datum:"):
+                dt = line.replace("Datum:", "").strip()
+                if re.match(r"^\d{4}-\d{2}-\d{2}$", dt): date_str = dt
+            elif line.startswith("Vendor:"):
+                v = line.replace("Vendor:", "").strip()
+                if v: vendor = v
+            elif line.startswith("Total:"):
+                t = line.replace("Total:", "").strip()
+                try: total_val = float(t)
+                except: pass
+                
+        return beleg_nr, date_str, vendor, total_val
+    except Exception as e:
+        st.sidebar.error(f"❌ Gemini API 오류: {e}")
+        return "", datetime.now().strftime("%Y-%m-%d"), "Error", 0.0
 
-# --- 5단계: 정밀 레거시 파서 및 수학적 검증 엔진 ---
-def advanced_date_parser(text):
-    text_lines = text.split('\n')
-    date_keywords = ["rechnungsdatum", "leistungsdatum", "belegdatum", "datum vom", "datum:", "ausstellungsdatum", "datum"]
-    for line in text_lines:
-        line_low = line.lower()
-        if any(kw in line_low for kw in date_keywords):
-            match = re.search(r"(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})", line)
-            if match: return match.group(1)
-    all_dates = re.findall(r"(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})", text)
-    if all_dates: return all_dates[0]
-    return datetime.now().strftime("%Y-%m-%d")
-
-def advanced_vendor_parser(text):
-    raw_low = text.lower()
-    clean_text = re.sub(r'[^a-z0-9]', '', raw_low)
-    if any(kw in clean_text for kw in ["star", "tank", "stelle", "cevah", "genc"]): return "Star Tankstelle"
-    elif any(kw in clean_text for kw in ["flaschen", "flaschn", "schenpost"]): return "Flaschenpost"
-    elif any(kw in clean_text for kw in ["abr", "steuerberat", "gesellschaftmbh"]): return "ABR Steuerberatung"
-    elif "amazon" in clean_text: return "Amazon"
-    elif "tesla" in clean_text or "supercharger" in clean_text: return "Tesla"
-    elif "santander" in clean_text: return "Santander"
-    elif any(kw in clean_text for kw in ["stadtmobil", "rheinruhr", "rhein-ruhr"]): return "Stadtmobil"
-    elif "dpd" in clean_text: return "DPD"
-    elif any(kw in clean_text for kw in ["shell", "aral", "totalenergies"]): return "Tankstelle"
-
-    lines = [l.strip() for l in text.split('\n') if l.strip()]
-    for i, line in enumerate(lines):
-        plz_match = re.search(r"\b\d{5}\s+[A-Za-zÄÖÜäöüß]+", line)
-        if plz_match:
-            context_block = lines[max(0, i-2):i+1]
-            if any("park impex" in c.lower() or "daniel park" in c.lower() for c in context_block): continue
-            for offset in [1, 2]:
-                if i >= offset:
-                    cand = lines[i-offset]
-                    if any(rf in cand.lower() for rf in ["gmbh", "ag", "kg", "se", "e.k."]):
-                        comp_match = re.search(r"([A-Za-z0-9\&\-\_\s]+(?:GmbH|AG|GbR|KG|SE|e\.K\.))", cand, re.IGNORECASE)
-                        if comp_match: return comp_match.group(1).strip()
-                        return cand
-            if i > 1 and len(lines[i-2]) < 45: return lines[i-2]
-    if lines and len(lines[0]) < 50: return lines[0]
-    return "Unbekannt"
-
-def parse_financial_amounts(text):
-    clean_text_for_num = re.sub(r"\d+(?:[\.,]\d*)\s*%", "", text)
-    raw_amounts = re.findall(r"\b\d+(?:[\.,]\d{2})\b", clean_text_for_num)
-    candidates = []
-    for amt in raw_amounts:
-        try:
-            if "," in amt and "." in amt: clean_amt = amt.replace(".", "").replace(",", ".")
-            elif "," in amt: clean_amt = amt.replace(",", ".")
-            elif "." in amt:
-                if amt[-3] == ".": clean_amt = amt
-                else: clean_amt = amt.replace(".", "")
-            else: clean_amt = amt
-            val = float(clean_amt)
-            if 1.0 <= val <= 2000.0 and val not in candidates: candidates.append(val)
-        except ValueError: continue
-
-    candidates = sorted(candidates, reverse=True)
-    total_brutto = 0.0
-    mwst_19 = 0.0
-    match_found = False
-
-    if len(candidates) >= 3:
-        for i in range(len(candidates)):
-            for j in range(i + 1, len(candidates)):
-                for k in range(j + 1, len(candidates)):
-                    B, N, M = candidates[i], candidates[j], candidates[k]
-                    if abs(B - (N + M)) < 0.05:
-                        if abs(M - (N * 0.19)) < 0.5 or abs(M - (B * 19 / 119)) < 0.5:
-                            total_brutto, mwst_19 = B, M
-                            match_found = True
-                            break
-                if match_found: break
-            if match_found: break
-
-    if not match_found:
-        lines = text.split('\n')
-        for line in reversed(lines):
-            line_low = line.lower()
-            if any(k in line_low for k in ["total", "gesamtsumme", "endbetrag", "brutto", "rechnungsbetrag", "zu zahlen", "zu zahlender betrag"]):
-                if any(x in line_low for x in ["netto"]) and not "brutto" in line_low: continue
-                price_match = re.search(r"([\d\.]*,\d{2}|[\d,]*\.\d{2})", line)
-                if price_match:
-                    try:
-                        matched_val = price_match.group(1).replace(".", "").replace(",", ".")
-                        if price_match.group(1)[-3] in [".", ","]:
-                            matched_val = price_match.group(1)[:-3].replace(".", "").replace(",", "") + "." + price_match.group(1)[-2:]
-                        total_brutto = float(matched_val)
-                        mwst_19 = round(total_brutto * 19 / 119, 2)
-                        match_found = True
-                        break
-                    except: continue
-
-    if not match_found and len(candidates) >= 1:
-        total_brutto = candidates[0]
-        mwst_19 = round(total_brutto * 19 / 119, 2)
-
-    return total_brutto, mwst_19
-
-
-# --- 6단계: 콜백 함수 테이블 동적 제어 레이어 ---
+# --- 3단계: 콜백 함수 테이블 동적 제어 레이어 ---
 def on_table_edited():
     edit_logs = st.session_state["beleg_editor_key"]
     if edit_logs and "edited_rows" in edit_logs:
@@ -215,7 +101,6 @@ def on_table_edited():
             zahlart_val = str(master_df.at[row_idx, "Zahlart"])
             z_code = "BANK" if zahlart_val == "Firmenkonto" else "CC"
             
-            # 💡 [구조 확장] 영수증 번호와 매출 인보이스 결합 처리
             beleg_no_val = str(master_df.at[row_idx, "Beleg_Nr"]).strip()
             b_suffix = f"_{beleg_no_val}" if beleg_no_val and beleg_no_val.lower() != "none" and beleg_no_val != "" else ""
             
@@ -226,13 +111,11 @@ def on_table_edited():
             date_val = master_df.at[row_idx, "Rechnungsdatum"]
             ext_val = master_df.at[row_idx, "_FileExt"]
             
-            # 최종 구조: 날짜_판매처_금액_결제코드_영수증번호_매출번호.확장자
             master_df.at[row_idx, "DATEV-Dateiname"] = f"{date_val}_{v_clean}_{brutto:.2f}EUR_{z_code}{b_suffix}{inv_suffix}.{ext_val}"
             
         st.session_state.edited_receipts = master_df
 
-
-# --- 7단계: UI 구동 및 데이터 파이프라인 결합 ---
+# --- 4단계: UI 구동 및 데이터 파이프라인 결합 ---
 uploaded_files = st.file_uploader("Wählen Sie Rechnungen (PDF oder Bild)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 
 default_zahlart = st.radio(
@@ -252,49 +135,44 @@ if uploaded_files:
     if st.session_state.edited_receipts is None:
         receipt_data = []
         
-        # 무료 티어 분당 호출량(15 RPM) 과부하 방지 알림 바 가동
         progress_bar = st.progress(0)
         total_files = len(uploaded_files)
         
-        with st.spinner("⚡ AI 기반 독일 전표 정밀 매핑 파이프라인 구동 중..."):
+        with st.spinner("🔮 Gemini Vision AI가 문서를 직접 보고 판독 중..."):
             for idx, uploaded_file in enumerate(uploaded_files):
                 file_bytes = uploaded_file.read()
                 file_ext = uploaded_file.name.split('.')[-1].lower()
-                is_pdf = (file_ext == "pdf")
                 
-                raw_text = get_cached_ocr_text(uploaded_file.name, file_bytes, is_pdf)
-                detected_date = advanced_date_parser(raw_text)
-                vendor = advanced_vendor_parser(raw_text)
-                total, mwst_19 = parse_financial_amounts(raw_text)
+                # 파일 확장자에 맞는 MIME Type 매핑
+                if file_ext == "pdf": mime_type = "application/pdf"
+                elif file_ext in ["jpg", "jpeg"]: mime_type = "image/jpeg"
+                else: mime_type = "image/png"
                 
-                # 💡 핵심: Gemini AI 무료 API 호출 엔진 연결
-                detected_beleg_nr = ask_gemini_beleg_nummer(raw_text)
+                # 💡 핵심: Gemini AI 무료 API 하나로 전체 필드 원샷 추출
+                ai_beleg_nr, ai_date, ai_vendor, ai_total = ask_gemini_vision_parser(file_bytes, mime_type)
                 
-                date_str = detected_date
-                if "." in detected_date:
-                    try: date_str = datetime.strptime(detected_date, "%d.%m.%Y").strftime("%Y-%m-%d")
-                    except: pass
-                
-                vendor_clean = re.sub(r'[\\/*?:"<>|]', '', vendor).strip()
+                # 독일 표준 부가세 19% 역산 역추정 계산
+                mwst_19 = round(ai_total * 19 / 119, 2)
+                vendor_clean = re.sub(r'[\\/*?:"<>|]', '', ai_vendor).strip()
                 init_z_code = "BANK" if default_zahlart == "Firmenkonto" else "CC"
                 
-                b_suffix = f"_{detected_beleg_nr}" if detected_beleg_nr else ""
-                proposed_name = f"{date_str}_{vendor_clean}_{total:.2f}EUR_{init_z_code}{b_suffix}.{file_ext}"
+                b_suffix = f"_{ai_beleg_nr}" if ai_beleg_nr else ""
+                proposed_name = f"{ai_date}_{vendor_clean}_{ai_total:.2f}EUR_{init_z_code}{b_suffix}.{file_ext}"
                 
                 receipt_data.append({
-                    "Rechnungsdatum": date_str, 
-                    "Verkäufer": vendor,
-                    "Brutto (€)": total, 
+                    "Rechnungsdatum": ai_date, 
+                    "Verkäufer": ai_vendor,
+                    "Brutto (€)": ai_total, 
                     "MwSt 19% (€)": mwst_19, 
-                    "Netto (€)": round(total - mwst_19, 2),
+                    "Netto (€)": round(ai_total - mwst_19, 2),
                     "Zahlart": default_zahlart,  
-                    "Beleg_Nr": detected_beleg_nr,  # 💡 AI가 자동으로 찾아온 번호 바인딩
+                    "Beleg_Nr": ai_beleg_nr,  # 🎯 AI가 눈으로 보고 직접 찾아낸 리얼 일련번호 기입!
                     "Verknüpfte_INV": "",      
                     "DATEV-Dateiname": proposed_name,
                     "_FileExt": file_ext
                 })
                 
-                # 💡 무료 티어 안정망 지연 처리 (Rate Limit 에러 완벽 회피)
+                # 무료 티어 안정망 4.2초 지연 스로틀링
                 progress_bar.progress(int((idx + 1) / total_files * 100))
                 if total_files > 1 and idx < total_files - 1:
                     time.sleep(4.2)
@@ -314,7 +192,6 @@ if uploaded_files:
 
     display_df = st.session_state.edited_receipts.copy()
     if hide_edited_rows:
-        # 영수증 번호와 매출 연동번호가 완벽해진 행은 자동으로 화면에서 숨겨 튕김 현상 차단
         display_df = display_df[
             ((display_df["Verknüpfte_INV"] == "") | (display_df["Verknüpfte_INV"].isna())) &
             (display_df["Zahlart"] == default_zahlart)
@@ -334,13 +211,7 @@ if uploaded_files:
             "Brutto (€)": st.column_config.NumberColumn("Brutto (€)", width="small", format="%.2f €"),
             "MwSt 19% (€)": st.column_config.NumberColumn("MwSt 19% (€)", width="small", format="%.2f €"),
             "Netto (€)": st.column_config.NumberColumn("Netto (€)", width="small", format="%.2f €"),
-            "Zahlart": st.column_config.SelectboxColumn(
-                "Zahlart (결제)", 
-                options=["Firmenkonto", "Mastercard"], 
-                width="medium",
-                required=True
-            ),
-            # 💡 신설된 영수증 번호 컬럼 설정
+            "Zahlart": st.column_config.SelectboxColumn("Zahlart (결제)", options=["Firmenkonto", "Mastercard"], width="medium", required=True),
             "Beleg_Nr": st.column_config.TextColumn("Beleg_Nr (영수증 번호)", width="medium"),
             "Verknüpfte_INV": st.column_config.TextColumn("Verknüpfte_INV (매출번호)", width="medium"),
             "DATEV-Dateiname": st.column_config.TextColumn("DATEV-Dateiname", width="max"),
