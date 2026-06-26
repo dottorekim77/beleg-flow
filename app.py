@@ -222,8 +222,10 @@ if uploaded_files:
         
         date_str = detected_date
         if "." in detected_date:
-            try: date_str = datetime.strptime(detected_date, "%d.%m.%Y").strftime("%Y-%m-%d")
-            except: pass
+            try: 
+                date_str = datetime.strptime(detected_date, "%d.%m.%Y").strftime("%Y-%m-%d")
+            except: 
+                pass
         
         vendor_clean = re.sub(r'[\\/*?:"<>|]', '', vendor).strip()
         proposed_name = f"{date_str}_{vendor_clean}_{total:.2f}EUR.{file_ext}"
@@ -234,15 +236,18 @@ if uploaded_files:
             st.code(raw_text)
         
         receipt_data.append({
-            "Rechnungsdatum": date_str, "Verkäufer": vendor,
-            "Brutto (€)": total, "MwSt 19% (€)": mwst_19, "Netto (€)": round(total - mwst_19, 2),
+            "Rechnungsdatum": date_str, 
+            "Verkäufer": vendor,
+            "Brutto (€)": total, 
+            "MwSt 19% (€)": mwst_19, 
+            "Netto (€)": round(total - mwst_19, 2),
             "DATEV-Dateiname": proposed_name
         })
         
-   if receipt_data:
+    if receipt_data:
         df = pd.DataFrame(receipt_data)
         
-        # 💡 [요구사항 1] 표 번호가 0번이 아닌 1번부터 시작되도록 인덱스 보정
+        # [요구사항 1] 표 번호가 0번이 아닌 1번부터 시작되도록 인덱스 보정
         df.index = df.index + 1
         df.index.name = "Nr."
         
@@ -264,7 +269,7 @@ if uploaded_files:
             workbook = writer.book
             worksheet = writer.sheets["DATEV_Export"]
             
-            # 💡 [요구사항 3] 첫 줄(헤더) 스타일 셋업: 신뢰감을 주는 짙은 네이비 배경 + 흰색 두꺼운 글씨
+            # [요구사항 3] 첫 줄(헤더) 스타일 셋업: 짙은 네이비 배경 + 흰색 두꺼운 글씨
             header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
             header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
             header_alignment = Alignment(horizontal="center", vertical="center")
@@ -274,7 +279,7 @@ if uploaded_files:
                 left=Side(style='thin', color='D9D9D9'),
                 right=Side(style='thin', color='D9D9D9'),
                 top=Side(style='thin', color='D9D9D9'),
-                bottom=Side(style='medium', color='1F4E78') # 헤더 하단은 강조선
+                bottom=Side(style='medium', color='1F4E78')
             )
             data_border = Border(
                 left=Side(style='thin', color='E0E0E0'),
@@ -296,25 +301,23 @@ if uploaded_files:
                 for col in range(1, worksheet.max_column + 1):
                     cell = worksheet.cell(row=row, column=col)
                     cell.border = data_border
-                    # 표 번호(Nr.)와 날짜 컬럼은 가독성을 위해 가운데 정렬
+                    # 표 번호(Nr.)와 날짜 컬럼은 가운데 정렬
                     if col in [1, 2]:
                         cell.alignment = Alignment(horizontal="center")
                     # 금액 컬럼은 우측 정렬
                     elif col in [4, 5, 6]:
                         cell.alignment = Alignment(horizontal="right")
             
-            # 💡 [요구사항 2] 셀 간격(열 너비) 자동 조절 알고리즘
+            # [요구사항 2] 셀 간격(열 너비) 자동 조절 알고리즘
             for col in worksheet.columns:
                 max_len = 0
-                col_letter = col[0].column_letter # A, B, C와 같은 열 문자 추출
+                col_letter = col[0].column_letter
                 for cell in col:
                     if cell.value is not None:
-                        # 문자열 최장 길이를 계산하여 동적 폭 산출
                         max_len = max(max_len, len(str(cell.value)))
-                # 텍스트가 잘리지 않도록 좌우 여백(+4)을 부여하고, 최소 너비를 12로 강제 제한
                 worksheet.column_dimensions[col_letter].width = max(max_len + 4, 12)
         
-        # Streamlit 화면에 프리미엄 엑셀 다운로드 버튼 배치
+        # 엑셀 다운로드 버튼 배치
         st.download_button(
             label="📥 고급 스타일 엑셀 파일 다운로드 (.xlsx)",
             data=openpyxl_buffer.getvalue(),
