@@ -11,8 +11,8 @@ import numpy as np
 
 # 1. 레이아웃 와이드 스크린 지정
 st.set_page_config(page_title="DE Beleg-Parser Pro", page_icon="🧾", layout="wide")
-st.title("🧾 Kognitiver Beleg-Parser (v1.3-StateFixed)")
-st.write("실시간 상태 전이 제어 콜백 매핑 및 원자적 데이터 동기화 엔진 탑재")
+st.title("🧾 Kognitiver Beleg-Parser (v1.4-Zahlungsweg)")
+st.write("결제 수단(Zahlart) 다이렉트 매핑 및 무역 매출-매입 연동 파이프라인 탑재")
 
 # --- 1단계: 컴퓨터 비전 이미지 전처리 엔진 ---
 def preprocess_image_for_ocr(file_bytes):
@@ -157,35 +157,39 @@ def parse_financial_amounts(text):
     return total_brutto, mwst_19
 
 
-# --- 💡 4단계 핵심 고도화: 완벽한 데이터 연속성 및 인덱스 정렬 보장을 위한 콜백(Callback) 핸들러 ---
+# --- 💡 4단계 핵심 고도화: 결제수단 및 매출인보이스 동적 세션 바인딩 캘백 ---
 def on_table_edited():
-    # 사용자의 입력 에디터 임시 버퍼 데이터를 즉시 캐치
     edit_logs = st.session_state["beleg_editor_key"]
     if edit_logs and "edited_rows" in edit_logs:
         master_df = st.session_state.edited_receipts.copy()
         
-        # 바뀐 행들의 데이터를 마스터 데이터프레임에 영구 강제 주입(Commit)
         for row_idx_str, changes in edit_logs["edited_rows"].items():
-            # 💡 핵심 교정 포인트: st.data_editor의 0기반 딕셔너리 키와 1이 더해진 master_df의 인덱스 매핑 동기화
-            # 데이터프레임의 실제 인덱스 이름(Nr.)이 1부터 시작하므로, 문자열 키값에 + 1을 하여 정확한 위치를 타겟팅합니다.
+            # 인덱스 1기반 오프셋 교정 반영
             row_idx = int(row_idx_str) + 1 
             
             for col_key, new_value in changes.items():
                 master_df.at[row_idx, col_key] = new_value
                 
-            # 해당 행의 세금 필드 및 DATEV 파일명 원자적 동시 실시간 보정 계산
+            # 기본 금액 재연산
             brutto = float(master_df.at[row_idx, "Brutto (€)"])
             mwst = float(master_df.at[row_idx, "MwSt 19% (€)"])
             master_df.at[row_idx, "Netto (€)"] = round(brutto - mwst, 2)
+            
+            # 결제수단(Zahlart) 코드 파싱 (파일명 접미사 매핑용)
+            zahlart_val = str(master_df.at[row_idx, "Zahlart"])
+            z_code = "BANK" if zahlart_val == "Firmenkonto" else "CC"
+            
+            # 매출 인보이스 번호 연동 처리
+            inv_val = str(master_df.at[row_idx, "Verknüpfte_INV"]).strip()
+            inv_suffix = f"_{inv_val}" if inv_val and inv_val != "None" and inv_val != "" else ""
             
             v_clean = re.sub(r'[\\/*?:"<>|]', '', str(master_df.at[row_idx, "Verkäufer"])).strip()
             date_val = master_df.at[row_idx, "Rechnungsdatum"]
             ext_val = master_df.at[row_idx, "_FileExt"]
             
-            # 최종 연동 파일명 포맷팅 동적 주입 (정확한 행에 매핑)
-            master_df.at[row_idx, "DATEV-Dateiname"] = f"{date_val}_{v_clean}_{brutto:.2f}EUR.{ext_val}"
+            # 💡 [최종 동적 규칙]: 날짜_판매처_금액_결제코드_인보이스번호.확장자
+            master_df.at[row_idx, "DATEV-Dateiname"] = f"{date_val}_{v_clean}_{brutto:.2f}EUR_{z_code}{inv_suffix}.{ext_val}"
             
-        # 가공 완료된 데이터프레임을 전역 세션에 최종 저장하여 초기화 원천 차단
         st.session_state.edited_receipts = master_df
 
 
@@ -193,7 +197,6 @@ def on_table_edited():
 uploaded_files = st.file_uploader("Wählen Sie Rechnungen (PDF oder Bild)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 
 if uploaded_files:
-    # 새로운 파일 배치 업로드 시 세션 완전 동기화 초기화 트리거
     file_batch_key = "".join([f.name for f in uploaded_files])
     if "last_batch_key" not in st.session_state or st.session_state.last_batch_key != file_batch_key:
         st.session_state.last_batch_key = file_batch_key
@@ -218,7 +221,8 @@ if uploaded_files:
                     except: pass
                 
                 vendor_clean = re.sub(r'[\\/*?:"<>|]', '', vendor).strip()
-                proposed_name = f"{date_str}_{vendor_clean}_{total:.2f}EUR.{file_ext}"
+                # 초기 생성 시에는 기본값 'Firmenkonto'(BANK)로 매핑
+                proposed_name = f"{date_str}_{vendor_clean}_{total:.2f}EUR_BANK.{file_ext}"
                 
                 receipt_data.append({
                     "Rechnungsdatum": date_str, 
@@ -226,6 +230,8 @@ if uploaded_files:
                     "Brutto (€)": total, 
                     "MwSt 19% (€)": mwst_19, 
                     "Netto (€)": round(total - mwst_19, 2),
+                    "Zahlart": "Firmenkonto",  # Default값 지정
+                    "Verknüpfte_INV": "",      # 공란 출발
                     "DATEV-Dateiname": proposed_name,
                     "_FileExt": file_ext
                 })
@@ -236,35 +242,44 @@ if uploaded_files:
         st.session_state.edited_receipts = df_init
 
     st.markdown("---")
-    st.subheader("📊 Auswertungsübersicht (연속 양방향 수정 최적화 구조)")
-    st.info("💡 테이블의 여러 칸을 연속으로 자유롭게 수정해 보세요. 수정한 모든 데이터가 밀림이나 초기화 없이 즉각 완벽하게 파일명에 자동 연동 보존됩니다.")
+    st.subheader("📊 Auswertungsübersicht (Zahlungsweg 확장 구조)")
+    st.info("💡 주유 영수증 등은 'Zahlart'만 선택해주시고, 무역 전표는 'Verknüpfte_INV' 칸에 인보이스 번호까지 적어주시면 파일명에 즉시 반영됩니다.")
 
-    # 💡 핵심 해결책: key와 on_change 콜백 함수를 연결하여 원자적 세션 격리 수행
+    # UI 렌더링 및 드롭다운/텍스트 컬럼 설정
     edited_df = st.data_editor(
         st.session_state.edited_receipts, 
         use_container_width=True,
         num_rows="fixed",
         key="beleg_editor_key",
-        on_change=on_table_edited, # 수정 데이터 감지 시 실시간 동기화 인터셉터 가동
+        on_change=on_table_edited,
         column_config={
             "Rechnungsdatum": st.column_config.TextColumn("Rechnungsdatum", width="medium"),
-            "Verkäufer": st.column_config.TextColumn("Verkäufer", width="large"),
+            "Verkäufer": st.column_config.TextColumn("Verkäufer", width="medium"),
             "Brutto (€)": st.column_config.NumberColumn("Brutto (€)", width="small", format="%.2f €"),
             "MwSt 19% (€)": st.column_config.NumberColumn("MwSt 19% (€)", width="small", format="%.2f €"),
             "Netto (€)": st.column_config.NumberColumn("Netto (€)", width="small", format="%.2f €"),
+            
+            # 💡 드롭다운 컴포넌트 바인딩으로 입력 편의성 증대
+            "Zahlart": st.column_config.SelectboxColumn(
+                "Zahlart (결제)", 
+                options=["Firmenkonto", "Mastercard"], 
+                width="medium",
+                required=True
+            ),
+            # 💡 무역 인보이스 입력 전용 자유 텍스트 칸
+            "Verknüpfte_INV": st.column_config.TextColumn("Verknüpfte_INV (매출번호)", width="medium", placeholder="예: INV-042"),
+            
             "DATEV-Dateiname": st.column_config.TextColumn("DATEV-Dateiname", width="max"),
             "_FileExt": None
         }
     )
 
-    # 엑셀/CSV 추출 전 숨김 컬럼 분리 가공
     final_df_to_export = st.session_state.edited_receipts.drop(columns=["_FileExt"])
 
-    # --- 트윈 다운로드 컴파일 컴포넌트 ---
+    # --- 다운로드 컴포넌트 ---
     col_dl1, col_dl2 = st.columns(2)
-    
-    # A. 프리미엄 엑셀 컴파일
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    
     openpyxl_buffer = io.BytesIO()
     with pd.ExcelWriter(openpyxl_buffer, engine='openpyxl') as writer:
         final_df_to_export.to_excel(writer, sheet_name="DATEV_Export", index=True)
@@ -297,21 +312,7 @@ if uploaded_files:
             worksheet.column_dimensions[col_letter].width = max(max_len + 4, 12)
             
     with col_dl1:
-        st.download_button(
-            label="📥 수정한 데이터로 고급 스타일 엑셀 다운로드 (.xlsx)",
-            data=openpyxl_buffer.getvalue(),
-            file_name=f"DATEV_Export_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
-        
-    # B. 범용 CSV 컴파일
+        st.download_button(label="📥 수정한 데이터로 고급 스타일 엑셀 다운로드 (.xlsx)", data=openpyxl_buffer.getvalue(), file_name=f"DATEV_Export_{datetime.now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     csv_buffer = final_df_to_export.to_csv(index=True, encoding="utf-8-sig")
     with col_dl2:
-        st.download_button(
-            label="📄 수정한 데이터로 범용 CSV 다운로드 (.csv)",
-            data=csv_buffer,
-            file_name=f"DATEV_Export_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
+        st.download_button(label="📄 수정한 데이터로 범용 CSV 다운로드 (.csv)", data=csv_buffer, file_name=f"DATEV_Export_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
