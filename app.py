@@ -9,10 +9,10 @@ import pytesseract
 import cv2
 import numpy as np
 
-# 💡 1. 레이아웃 와이드 스크린 지정으로 시원한 화면 제공
+# 1. 레이아웃 와이드 스크린 지정
 st.set_page_config(page_title="DE Beleg-Parser Pro", page_icon="🧾", layout="wide")
-st.title("🧾 Kognitiver Beleg-Parser (v1.2-FastWide)")
-st.write("캐싱 캐시 레이어 및 실시간 반응형 데이터 바인딩 엔진 탑재")
+st.title("🧾 Kognitiver Beleg-Parser (v1.3-StateFixed)")
+st.write("실시간 상태 전이 제어 콜백 매핑 및 원자적 데이터 동기화 엔진 탑재")
 
 # --- 1단계: 컴퓨터 비전 이미지 전처리 엔진 ---
 def preprocess_image_for_ocr(file_bytes):
@@ -28,7 +28,7 @@ def preprocess_image_for_ocr(file_bytes):
     except Exception:
         return None
 
-# --- 2단계: 텍스트 추출 엔진 (속도 향상을 위해 캐싱 구조 적용) ---
+# --- 2단계: 텍스트 추출 엔진 (캐싱 레이어) ---
 @st.cache_data(show_spinner=False)
 def get_cached_ocr_text(file_name, file_bytes, is_pdf):
     if is_pdf:
@@ -157,15 +157,44 @@ def parse_financial_amounts(text):
     return total_brutto, mwst_19
 
 
-# --- 4단계: UI 및 최적화된 연동 알고리즘 구동부 ---
+# --- 💡 4단계 핵심 고도화: 완벽한 데이터 연속성 보장을 위한 콜백(Callback) 핸들러 ---
+def on_table_edited():
+    # 사용자의 입력 에디터 임시 버퍼 데이터를 즉시 캐치
+    edit_logs = st.session_state["beleg_editor_key"]
+    if edit_logs and "edited_rows" in edit_logs:
+        master_df = st.session_state.edited_receipts.copy()
+        
+        # 바뀐 행들의 데이터를 마스터 데이터프레임에 영구 강제 주입(Commit)
+        for row_idx_str, changes in edit_logs["edited_rows"].items():
+            row_idx = int(row_idx_str)
+            for col_key, new_value in changes.items():
+                master_df.at[row_idx, col_key] = new_value
+                
+            # 해당 행의 세금 필드 및 DATEV 파일명 원자적 동시 실시간 보정 계산
+            brutto = float(master_df.at[row_idx, "Brutto (€)"])
+            mwst = float(master_df.at[row_idx, "MwSt 19% (€)"])
+            master_df.at[row_idx, "Netto (€)"] = round(brutto - mwst, 2)
+            
+            v_clean = re.sub(r'[\\/*?:"<>|]', '', str(master_df.at[row_idx, "Verkäufer"])).strip()
+            date_val = master_df.at[row_idx, "Rechnungsdatum"]
+            ext_val = master_df.at[row_idx, "_FileExt"]
+            
+            # 최종 연동 파일명 포맷팅 동적 주입
+            master_df.at[row_idx, "DATEV-Dateiname"] = f"{date_val}_{v_clean}_{brutto:.2f}EUR.{ext_val}"
+            
+        # 가공 완료된 데이터프레임을 전역 세션에 최종 저장하여 초기화 원천 차단
+        st.session_state.edited_receipts = master_df
+
+
+# --- 5단계: UI 구동 및 데이터 파이프라인 결합 ---
 uploaded_files = st.file_uploader("Wählen Sie Rechnungen (PDF oder Bild)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 
-# 새로운 파일 묶음이 올라오면 이전 세션 데이터를 날리는 트리거 역할
 if uploaded_files:
+    # 새로운 파일 배치 업로드 시 세션 완전 동기화 초기화 트리거
     file_batch_key = "".join([f.name for f in uploaded_files])
     if "last_batch_key" not in st.session_state or st.session_state.last_batch_key != file_batch_key:
         st.session_state.last_batch_key = file_batch_key
-        st.session_state.edited_receipts = None  # 초기화 보장
+        st.session_state.edited_receipts = None 
 
     if st.session_state.edited_receipts is None:
         receipt_data = []
@@ -175,9 +204,7 @@ if uploaded_files:
                 file_ext = uploaded_file.name.split('.')[-1].lower()
                 is_pdf = (file_ext == "pdf")
                 
-                # 💡 캐싱된 고속 OCR 함수 호출 (수정 시 재실행을 완벽 차단하여 멈춤 현상 해결)
                 raw_text = get_cached_ocr_text(uploaded_file.name, file_bytes, is_pdf)
-                
                 detected_date = advanced_date_parser(raw_text)
                 vendor = advanced_vendor_parser(raw_text)
                 total, mwst_19 = parse_financial_amounts(raw_text)
@@ -200,24 +227,22 @@ if uploaded_files:
                     "_FileExt": file_ext
                 })
         
-        # 데이터프레임 구조화 및 세션 상태 보존
         df_init = pd.DataFrame(receipt_data)
         df_init.index = df_init.index + 1
         df_init.index.name = "Nr."
         st.session_state.edited_receipts = df_init
 
-    # 마스터 세션 데이터 참조
-    current_df = st.session_state.edited_receipts
-
     st.markdown("---")
-    st.subheader("📊 Auswertungsübersicht (실시간 완벽 양방향 반영)")
-    st.info("💡 테이블의 셀을 더블클릭하여 수정하면 우측의 'DATEV-Dateiname'과 세금 연산이 즉시 실시간 변환됩니다.")
+    st.subheader("📊 Auswertungsübersicht (연속 양방향 수정 최적화 구조)")
+    st.info("💡 테이블의 여러 칸을 연속으로 자유롭게 수정해 보세요. 수정한 모든 데이터가 밀림이나 초기화 없이 즉각 완벽하게 파일명에 자동 연동 보존됩니다.")
 
-    # 💡 2. 데이터 에디터 마운트 및 와이드 그리드 세팅
+    # 💡 핵심 해결책: key와 on_change 콜백 함수를 연결하여 원자적 세션 격리 수행
     edited_df = st.data_editor(
-        current_df, 
+        st.session_state.edited_receipts, 
         use_container_width=True,
         num_rows="fixed",
+        key="beleg_editor_key",
+        on_change=on_table_edited, # 수정 데이터 감지 시 실시간 동기화 인터셉터 가동
         column_config={
             "Rechnungsdatum": st.column_config.TextColumn("Rechnungsdatum", width="medium"),
             "Verkäufer": st.column_config.TextColumn("Verkäufer", width="large"),
@@ -229,31 +254,14 @@ if uploaded_files:
         }
     )
 
-    # 💡 3. [핵심 요구사항] 유저가 수정한 Verkäufer 및 금액 정보를 실시간 동적 재바인딩
-    edited_df["Netto (€)"] = (edited_df["Brutto (€)"] - edited_df["MwSt 19% (€)"]).round(2)
-    
-    updated_filenames = []
-    for idx, row in edited_df.iterrows():
-        v_clean = re.sub(r'[\\/*?:"<>|]', '', str(row["Verkäufer"])).strip()
-        # 사용자가 수정한 Verkäufer 명칭과 Brutto 금액을 바탕으로 동적 갱신 ⚡
-        new_name = f"{row['Rechnungsdatum']}_{v_clean}_{row['Brutto (€)']:.2f}EUR.{row['_FileExt']}"
-        updated_filenames.append(new_name)
-        
-    edited_df["DATEV-Dateiname"] = updated_filenames
-    
-    # 세션 상태 최신화 보장
-    st.session_state.edited_receipts = edited_df
+    # 엑셀/CSV 추출 전 숨김 컬럼 분리 가공
+    final_df_to_export = st.session_state.edited_receipts.drop(columns=["_FileExt"])
 
-    # 내보내기용 임시 열 삭제 패킹
-    final_df_to_export = edited_df.drop(columns=["_FileExt"])
-
-    # 💡 4. 트윈 다운로드 버튼 구조 설계
+    # --- 트윈 다운로드 컴파일 컴포넌트 ---
     col_dl1, col_dl2 = st.columns(2)
     
-    # A. 프리미엄 엑셀 컴파일 아웃풋
-    import io
+    # A. 프리미엄 엑셀 컴파일
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    
     openpyxl_buffer = io.BytesIO()
     with pd.ExcelWriter(openpyxl_buffer, engine='openpyxl') as writer:
         final_df_to_export.to_excel(writer, sheet_name="DATEV_Export", index=True)
@@ -294,7 +302,7 @@ if uploaded_files:
             use_container_width=True
         )
         
-    # B. 세무 전용 범용 CSV 아웃풋
+    # B. 범용 CSV 컴파일
     csv_buffer = final_df_to_export.to_csv(index=True, encoding="utf-8-sig")
     with col_dl2:
         st.download_button(
