@@ -11,7 +11,7 @@ import numpy as np
 
 # 1. 레이아웃 와이드 스크린 지정
 st.set_page_config(page_title="DE Beleg-Parser Pro", page_icon="🧾", layout="wide")
-st.title("🧾 Kognitiver Beleg-Parser (v1.4-Zahlungsweg)")
+st.title("🧾 Kognitiver Beleg-Parser (v1.4.1-Fixed)")
 st.write("결제 수단(Zahlart) 다이렉트 매핑 및 무역 매출-매입 연동 파이프라인 탑재")
 
 # --- 1단계: 컴퓨터 비전 이미지 전처리 엔진 ---
@@ -157,37 +157,33 @@ def parse_financial_amounts(text):
     return total_brutto, mwst_19
 
 
-# --- 💡 4단계 핵심 고도화: 결제수단 및 매출인보이스 동적 세션 바인딩 캘백 ---
+# --- 💡 4단계: 결제수단 및 매출인보이스 동적 세션 바인딩 콜백 ---
 def on_table_edited():
     edit_logs = st.session_state["beleg_editor_key"]
     if edit_logs and "edited_rows" in edit_logs:
         master_df = st.session_state.edited_receipts.copy()
         
         for row_idx_str, changes in edit_logs["edited_rows"].items():
-            # 인덱스 1기반 오프셋 교정 반영
             row_idx = int(row_idx_str) + 1 
             
             for col_key, new_value in changes.items():
                 master_df.at[row_idx, col_key] = new_value
                 
-            # 기본 금액 재연산
             brutto = float(master_df.at[row_idx, "Brutto (€)"])
             mwst = float(master_df.at[row_idx, "MwSt 19% (€)"])
             master_df.at[row_idx, "Netto (€)"] = round(brutto - mwst, 2)
             
-            # 결제수단(Zahlart) 코드 파싱 (파일명 접미사 매핑용)
             zahlart_val = str(master_df.at[row_idx, "Zahlart"])
             z_code = "BANK" if zahlart_val == "Firmenkonto" else "CC"
             
-            # 매출 인보이스 번호 연동 처리
             inv_val = str(master_df.at[row_idx, "Verknüpfte_INV"]).strip()
-            inv_suffix = f"_{inv_val}" if inv_val and inv_val != "None" and inv_val != "" else ""
+            # None 또는 공백 처리 안전망 강화
+            inv_suffix = f"_{inv_val}" if inv_val and inv_val.lower() != "none" and inv_val != "" else ""
             
             v_clean = re.sub(r'[\\/*?:"<>|]', '', str(master_df.at[row_idx, "Verkäufer"])).strip()
             date_val = master_df.at[row_idx, "Rechnungsdatum"]
             ext_val = master_df.at[row_idx, "_FileExt"]
             
-            # 💡 [최종 동적 규칙]: 날짜_판매처_금액_결제코드_인보이스번호.확장자
             master_df.at[row_idx, "DATEV-Dateiname"] = f"{date_val}_{v_clean}_{brutto:.2f}EUR_{z_code}{inv_suffix}.{ext_val}"
             
         st.session_state.edited_receipts = master_df
@@ -221,7 +217,6 @@ if uploaded_files:
                     except: pass
                 
                 vendor_clean = re.sub(r'[\\/*?:"<>|]', '', vendor).strip()
-                # 초기 생성 시에는 기본값 'Firmenkonto'(BANK)로 매핑
                 proposed_name = f"{date_str}_{vendor_clean}_{total:.2f}EUR_BANK.{file_ext}"
                 
                 receipt_data.append({
@@ -230,8 +225,8 @@ if uploaded_files:
                     "Brutto (€)": total, 
                     "MwSt 19% (€)": mwst_19, 
                     "Netto (€)": round(total - mwst_19, 2),
-                    "Zahlart": "Firmenkonto",  # Default값 지정
-                    "Verknüpfte_INV": "",      # 공란 출발
+                    "Zahlart": "Firmenkonto",  
+                    "Verknüpfte_INV": "",      
                     "DATEV-Dateiname": proposed_name,
                     "_FileExt": file_ext
                 })
@@ -245,7 +240,7 @@ if uploaded_files:
     st.subheader("📊 Auswertungsübersicht (Zahlungsweg 확장 구조)")
     st.info("💡 주유 영수증 등은 'Zahlart'만 선택해주시고, 무역 전표는 'Verknüpfte_INV' 칸에 인보이스 번호까지 적어주시면 파일명에 즉시 반영됩니다.")
 
-    # UI 렌더링 및 드롭다운/텍스트 컬럼 설정
+    # 💡 에러 수정 포인트: st.column_config.TextColumn 내부의 placeholder 파라미터 완전 제거
     edited_df = st.data_editor(
         st.session_state.edited_receipts, 
         use_container_width=True,
@@ -258,17 +253,14 @@ if uploaded_files:
             "Brutto (€)": st.column_config.NumberColumn("Brutto (€)", width="small", format="%.2f €"),
             "MwSt 19% (€)": st.column_config.NumberColumn("MwSt 19% (€)", width="small", format="%.2f €"),
             "Netto (€)": st.column_config.NumberColumn("Netto (€)", width="small", format="%.2f €"),
-            
-            # 💡 드롭다운 컴포넌트 바인딩으로 입력 편의성 증대
             "Zahlart": st.column_config.SelectboxColumn(
                 "Zahlart (결제)", 
                 options=["Firmenkonto", "Mastercard"], 
                 width="medium",
                 required=True
             ),
-            # 💡 무역 인보이스 입력 전용 자유 텍스트 칸
-            "Verknüpfte_INV": st.column_config.TextColumn("Verknüpfte_INV (매출번호)", width="medium", placeholder="예: INV-042"),
-            
+            # 에러 원인인 placeholder 인자를 제거하고 깔끔하게 텍스트 컬럼으로 매핑
+            "Verknüpfte_INV": st.column_config.TextColumn("Verknüpfte_INV (매출번호)", width="medium"),
             "DATEV-Dateiname": st.column_config.TextColumn("DATEV-Dateiname", width="max"),
             "_FileExt": None
         }
