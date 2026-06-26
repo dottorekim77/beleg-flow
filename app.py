@@ -8,13 +8,27 @@ from PIL import Image
 import pytesseract
 import cv2
 import numpy as np
+import time
+import google.generativeai as genai
 
 # 1. 레이아웃 와이드 스크린 지정
-st.set_page_config(page_title="DE Beleg-Parser Pro", page_icon="🧾", layout="wide")
-st.title("🧾 Kognitiver Beleg-Parser (v1.4.1-Fixed)")
-st.write("결제 수단(Zahlart) 다이렉트 매핑 및 무역 매출-매입 연동 파이프라인 탑재")
+st.set_page_config(page_title="DE Beleg-Parser Pro AI", page_icon="🧾", layout="wide")
+st.title("🧾 Kognitiver Beleg-Parser (v1.6-Gemini AI)")
+st.write("무료 Gemini 1.5 Flash API 결합형 영수증 번호 자동 탐지 및 스크롤 프리 엔진")
 
-# --- 1단계: 컴퓨터 비전 이미지 전처리 엔진 ---
+# --- 1단계: Secrets 및 로컬 환경변수 통합 로드 ---
+if "GEMINI_API_KEY" in st.secrets:
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+else:
+    # 로컬 테스트용 입력창 (Secrets 설정을 안 했을 경우 우회로)
+    API_KEY = st.sidebar.text_input("Gemini API Key", type="password")
+
+if API_KEY:
+    genai.configure(api_key=API_KEY)
+else:
+    st.sidebar.warning("⚠️ 구글 AI 스튜디오에서 발급받은 API Key를 Streamlit Secrets에 넣거나 왼쪽에 입력해 주세요. (무료 버전을 위해 필수)")
+
+# --- 2단계: 컴퓨터 비전 이미지 전처리 엔진 ---
 def preprocess_image_for_ocr(file_bytes):
     try:
         nparr = np.frombuffer(file_bytes, np.uint8)
@@ -28,7 +42,7 @@ def preprocess_image_for_ocr(file_bytes):
     except Exception:
         return None
 
-# --- 2단계: 텍스트 추출 엔진 (캐싱 레이어) ---
+# --- 3단계: 텍스트 추출 엔진 (캐싱 레이어) ---
 @st.cache_data(show_spinner=False)
 def get_cached_ocr_text(file_name, file_bytes, is_pdf):
     if is_pdf:
@@ -55,7 +69,32 @@ def get_cached_ocr_text(file_name, file_bytes, is_pdf):
         except Exception as e:
             return f"OCR Error: {e}"
 
-# --- 3단계: 정밀 파서 및 수학적 검증 엔진 ---
+# --- 4단계: 💡 인공지능 기반 영수증 번호(Rechnungsnummer) 에이전트 ---
+def ask_gemini_beleg_nummer(ocr_text):
+    if not API_KEY:
+        return ""
+    try:
+        # 가성비 및 무료 분당 할당량이 뛰어난 1.5 Flash 타겟팅
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        prompt = f"""
+        너는 독일 세무 회계 및 관세 전표 전문가야. 
+        아래 제공된 독일 영수증/인보이스의 OCR 텍스트 분석해서 오직 'Rechnungsnummer' 또는 'Belegnummer' (영수증 번호)만 식별해서 뱉어내야 해.
+
+        [주의사항]
+        1. 인사말, 부가 설명, 'Rechnungsnummer:' 같은 접두사 절대 금지. 오직 일치하는 일련번호 문자열 딱 하나만 반환해.
+        2. Steuernummer(세무번호), Umsatzsteuer-ID(부가세번호), Kunden-Nr(고객번호), IBAN, 날짜 포맷과 절대 혼동하지 마.
+        3. 만약 도저히 영수증 번호로 보이지 않거나 텍스트가 깨져서 찾을 수 없다면, 아무 글자도 적지 말고 그냥 빈 문자열만 반환해.
+
+        [영수증 OCR 텍스트]
+        {ocr_text}
+        """
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception:
+        return ""
+
+# --- 5단계: 정밀 레거시 파서 및 수학적 검증 엔진 ---
 def advanced_date_parser(text):
     text_lines = text.split('\n')
     date_keywords = ["rechnungsdatum", "leistungsdatum", "belegdatum", "datum vom", "datum:", "ausstellungsdatum", "datum"]
@@ -157,7 +196,7 @@ def parse_financial_amounts(text):
     return total_brutto, mwst_19
 
 
-# --- 💡 4단계: 결제수단 및 매출인보이스 동적 세션 바인딩 콜백 ---
+# --- 6단계: 콜백 함수 테이블 동적 제어 레이어 ---
 def on_table_edited():
     edit_logs = st.session_state["beleg_editor_key"]
     if edit_logs and "edited_rows" in edit_logs:
@@ -176,21 +215,33 @@ def on_table_edited():
             zahlart_val = str(master_df.at[row_idx, "Zahlart"])
             z_code = "BANK" if zahlart_val == "Firmenkonto" else "CC"
             
+            # 💡 [구조 확장] 영수증 번호와 매출 인보이스 결합 처리
+            beleg_no_val = str(master_df.at[row_idx, "Beleg_Nr"]).strip()
+            b_suffix = f"_{beleg_no_val}" if beleg_no_val and beleg_no_val.lower() != "none" and beleg_no_val != "" else ""
+            
             inv_val = str(master_df.at[row_idx, "Verknüpfte_INV"]).strip()
-            # None 또는 공백 처리 안전망 강화
             inv_suffix = f"_{inv_val}" if inv_val and inv_val.lower() != "none" and inv_val != "" else ""
             
             v_clean = re.sub(r'[\\/*?:"<>|]', '', str(master_df.at[row_idx, "Verkäufer"])).strip()
             date_val = master_df.at[row_idx, "Rechnungsdatum"]
             ext_val = master_df.at[row_idx, "_FileExt"]
             
-            master_df.at[row_idx, "DATEV-Dateiname"] = f"{date_val}_{v_clean}_{brutto:.2f}EUR_{z_code}{inv_suffix}.{ext_val}"
+            # 최종 구조: 날짜_판매처_금액_결제코드_영수증번호_매출번호.확장자
+            master_df.at[row_idx, "DATEV-Dateiname"] = f"{date_val}_{v_clean}_{brutto:.2f}EUR_{z_code}{b_suffix}{inv_suffix}.{ext_val}"
             
         st.session_state.edited_receipts = master_df
 
 
-# --- 5단계: UI 구동 및 데이터 파이프라인 결합 ---
+# --- 7단계: UI 구동 및 데이터 파이프라인 결합 ---
 uploaded_files = st.file_uploader("Wählen Sie Rechnungen (PDF oder Bild)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
+
+default_zahlart = st.radio(
+    "⚙️ 기본 결제수단 설정 (Zahlart-Default)",
+    options=["Firmenkonto", "Mastercard"],
+    index=0,
+    horizontal=True,
+    help="영수증을 업로드하기 전에 결제 방식을 선택하면 해당 방식으로 기본 설정됩니다."
+)
 
 if uploaded_files:
     file_batch_key = "".join([f.name for f in uploaded_files])
@@ -200,8 +251,13 @@ if uploaded_files:
 
     if st.session_state.edited_receipts is None:
         receipt_data = []
-        with st.spinner("⚡ 독일 영수증 고속 분석 엔진 가동 중..."):
-            for uploaded_file in uploaded_files:
+        
+        # 무료 티어 분당 호출량(15 RPM) 과부하 방지 알림 바 가동
+        progress_bar = st.progress(0)
+        total_files = len(uploaded_files)
+        
+        with st.spinner("⚡ AI 기반 독일 전표 정밀 매핑 파이프라인 구동 중..."):
+            for idx, uploaded_file in enumerate(uploaded_files):
                 file_bytes = uploaded_file.read()
                 file_ext = uploaded_file.name.split('.')[-1].lower()
                 is_pdf = (file_ext == "pdf")
@@ -211,13 +267,19 @@ if uploaded_files:
                 vendor = advanced_vendor_parser(raw_text)
                 total, mwst_19 = parse_financial_amounts(raw_text)
                 
+                # 💡 핵심: Gemini AI 무료 API 호출 엔진 연결
+                detected_beleg_nr = ask_gemini_beleg_nummer(raw_text)
+                
                 date_str = detected_date
                 if "." in detected_date:
                     try: date_str = datetime.strptime(detected_date, "%d.%m.%Y").strftime("%Y-%m-%d")
                     except: pass
                 
                 vendor_clean = re.sub(r'[\\/*?:"<>|]', '', vendor).strip()
-                proposed_name = f"{date_str}_{vendor_clean}_{total:.2f}EUR_BANK.{file_ext}"
+                init_z_code = "BANK" if default_zahlart == "Firmenkonto" else "CC"
+                
+                b_suffix = f"_{detected_beleg_nr}" if detected_beleg_nr else ""
+                proposed_name = f"{date_str}_{vendor_clean}_{total:.2f}EUR_{init_z_code}{b_suffix}.{file_ext}"
                 
                 receipt_data.append({
                     "Rechnungsdatum": date_str, 
@@ -225,26 +287,45 @@ if uploaded_files:
                     "Brutto (€)": total, 
                     "MwSt 19% (€)": mwst_19, 
                     "Netto (€)": round(total - mwst_19, 2),
-                    "Zahlart": "Firmenkonto",  
+                    "Zahlart": default_zahlart,  
+                    "Beleg_Nr": detected_beleg_nr,  # 💡 AI가 자동으로 찾아온 번호 바인딩
                     "Verknüpfte_INV": "",      
                     "DATEV-Dateiname": proposed_name,
                     "_FileExt": file_ext
                 })
-        
+                
+                # 💡 무료 티어 안정망 지연 처리 (Rate Limit 에러 완벽 회피)
+                progress_bar.progress(int((idx + 1) / total_files * 100))
+                if total_files > 1 and idx < total_files - 1:
+                    time.sleep(4.2)
+                    
         df_init = pd.DataFrame(receipt_data)
         df_init.index = df_init.index + 1
         df_init.index.name = "Nr."
         st.session_state.edited_receipts = df_init
 
     st.markdown("---")
-    st.subheader("📊 Auswertungsübersicht (Zahlungsweg 확장 구조)")
-    st.info("💡 주유 영수증 등은 'Zahlart'만 선택해주시고, 무역 전표는 'Verknüpfte_INV' 칸에 인보이스 번호까지 적어주시면 파일명에 즉시 반영됩니다.")
+    
+    col_sub1, col_sub2 = st.columns([2, 1])
+    with col_sub1:
+        st.subheader("📊 Auswertungsübersicht")
+    with col_sub2:
+        hide_edited_rows = st.checkbox("🔍 작업 효율화: 완료된 항목 숨기기 (스크롤 프리 뷰)", value=False)
 
-    # 💡 에러 수정 포인트: st.column_config.TextColumn 내부의 placeholder 파라미터 완전 제거
+    display_df = st.session_state.edited_receipts.copy()
+    if hide_edited_rows:
+        # 영수증 번호와 매출 연동번호가 완벽해진 행은 자동으로 화면에서 숨겨 튕김 현상 차단
+        display_df = display_df[
+            ((display_df["Verknüpfte_INV"] == "") | (display_df["Verknüpfte_INV"].isna())) &
+            (display_df["Zahlart"] == default_zahlart)
+        ]
+
+    # 테이블 에디터 렌더링
     edited_df = st.data_editor(
-        st.session_state.edited_receipts, 
+        display_df, 
         use_container_width=True,
         num_rows="fixed",
+        height=550, 
         key="beleg_editor_key",
         on_change=on_table_edited,
         column_config={
@@ -259,7 +340,8 @@ if uploaded_files:
                 width="medium",
                 required=True
             ),
-            # 에러 원인인 placeholder 인자를 제거하고 깔끔하게 텍스트 컬럼으로 매핑
+            # 💡 신설된 영수증 번호 컬럼 설정
+            "Beleg_Nr": st.column_config.TextColumn("Beleg_Nr (영수증 번호)", width="medium"),
             "Verknüpfte_INV": st.column_config.TextColumn("Verknüpfte_INV (매출번호)", width="medium"),
             "DATEV-Dateiname": st.column_config.TextColumn("DATEV-Dateiname", width="max"),
             "_FileExt": None
@@ -304,7 +386,7 @@ if uploaded_files:
             worksheet.column_dimensions[col_letter].width = max(max_len + 4, 12)
             
     with col_dl1:
-        st.download_button(label="📥 수정한 데이터로 고급 스타일 엑셀 다운로드 (.xlsx)", data=openpyxl_buffer.getvalue(), file_name=f"DATEV_Export_{datetime.now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        st.download_button(label="📥 수정한 전체 데이터로 고급 스타일 엑셀 다운로드 (.xlsx)", data=openpyxl_buffer.getvalue(), file_name=f"DATEV_Export_{datetime.now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     csv_buffer = final_df_to_export.to_csv(index=True, encoding="utf-8-sig")
     with col_dl2:
-        st.download_button(label="📄 수정한 데이터로 범용 CSV 다운로드 (.csv)", data=csv_buffer, file_name=f"DATEV_Export_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
+        st.download_button(label="📄 수정한 전체 데이터로 범용 CSV 다운로드 (.csv)", data=csv_buffer, file_name=f"DATEV_Export_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
