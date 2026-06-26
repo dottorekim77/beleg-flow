@@ -157,7 +157,7 @@ def parse_financial_amounts(text):
     return total_brutto, mwst_19
 
 
-# --- 💡 4단계 핵심 고도화: 완벽한 데이터 연속성 보장을 위한 콜백(Callback) 핸들러 ---
+# --- 💡 4단계 핵심 고도화: 완벽한 데이터 연속성 및 인덱스 정렬 보장을 위한 콜백(Callback) 핸들러 ---
 def on_table_edited():
     # 사용자의 입력 에디터 임시 버퍼 데이터를 즉시 캐치
     edit_logs = st.session_state["beleg_editor_key"]
@@ -166,7 +166,10 @@ def on_table_edited():
         
         # 바뀐 행들의 데이터를 마스터 데이터프레임에 영구 강제 주입(Commit)
         for row_idx_str, changes in edit_logs["edited_rows"].items():
-            row_idx = int(row_idx_str)
+            # 💡 핵심 교정 포인트: st.data_editor의 0기반 딕셔너리 키와 1이 더해진 master_df의 인덱스 매핑 동기화
+            # 데이터프레임의 실제 인덱스 이름(Nr.)이 1부터 시작하므로, 문자열 키값에 + 1을 하여 정확한 위치를 타겟팅합니다.
+            row_idx = int(row_idx_str) + 1 
+            
             for col_key, new_value in changes.items():
                 master_df.at[row_idx, col_key] = new_value
                 
@@ -179,7 +182,7 @@ def on_table_edited():
             date_val = master_df.at[row_idx, "Rechnungsdatum"]
             ext_val = master_df.at[row_idx, "_FileExt"]
             
-            # 최종 연동 파일명 포맷팅 동적 주입
+            # 최종 연동 파일명 포맷팅 동적 주입 (정확한 행에 매핑)
             master_df.at[row_idx, "DATEV-Dateiname"] = f"{date_val}_{v_clean}_{brutto:.2f}EUR.{ext_val}"
             
         # 가공 완료된 데이터프레임을 전역 세션에 최종 저장하여 초기화 원천 차단
