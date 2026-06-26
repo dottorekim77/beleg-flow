@@ -9,10 +9,10 @@ import pytesseract
 import cv2
 import numpy as np
 
-# Streamlit 기본 설정: layout="wide"로 설정하여 화면 전체 가로폭 사용 💡
+# 💡 1. 레이아웃 와이드 스크린 지정으로 시원한 화면 제공
 st.set_page_config(page_title="DE Beleg-Parser Pro", page_icon="🧾", layout="wide")
-st.title("🧾 Kognitiver Beleg-Parser (v1.1-Wide)")
-st.write("안정화된 하이브리드 수학 검증 및 OpenCV 이미지 전처리 엔진 탑재")
+st.title("🧾 Kognitiver Beleg-Parser (v1.2-FastWide)")
+st.write("캐싱 캐시 레이어 및 실시간 반응형 데이터 바인딩 엔진 탑재")
 
 # --- 1단계: 컴퓨터 비전 이미지 전처리 엔진 ---
 def preprocess_image_for_ocr(file_bytes):
@@ -28,31 +28,32 @@ def preprocess_image_for_ocr(file_bytes):
     except Exception:
         return None
 
-# --- 2단계: 텍스트 추출 엔진 ---
-def extract_text_from_pdf(file_bytes):
-    try:
-        pdf_file = io.BytesIO(file_bytes)
-        reader = PdfReader(pdf_file)
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() or ""
-        return text
-    except Exception:
-        return ""
-
-def extract_text_from_image(file_bytes):
-    try:
-        processed_img = preprocess_image_for_ocr(file_bytes)
-        if processed_img is not None:
-            pil_img = Image.fromarray(processed_img)
-            text = pytesseract.image_to_string(pil_img, lang='deu+eng')
-            if len(text.strip()) < 10:
+# --- 2단계: 텍스트 추출 엔진 (속도 향상을 위해 캐싱 구조 적용) ---
+@st.cache_data(show_spinner=False)
+def get_cached_ocr_text(file_name, file_bytes, is_pdf):
+    if is_pdf:
+        try:
+            pdf_file = io.BytesIO(file_bytes)
+            reader = PdfReader(pdf_file)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() or ""
+            return text
+        except Exception:
+            return ""
+    else:
+        try:
+            processed_img = preprocess_image_for_ocr(file_bytes)
+            if processed_img is not None:
+                pil_img = Image.fromarray(processed_img)
+                text = pytesseract.image_to_string(pil_img, lang='deu+eng')
+                if len(text.strip()) < 10:
+                    text = pytesseract.image_to_string(Image.open(io.BytesIO(file_bytes)), lang='deu+eng')
+            else:
                 text = pytesseract.image_to_string(Image.open(io.BytesIO(file_bytes)), lang='deu+eng')
-        else:
-            text = pytesseract.image_to_string(Image.open(io.BytesIO(file_bytes)), lang='deu+eng')
-        return text
-    except Exception as e:
-        return f"OCR Error: {e}"
+            return text
+        except Exception as e:
+            return f"OCR Error: {e}"
 
 # --- 3단계: 정밀 파서 및 수학적 검증 엔진 ---
 def advanced_date_parser(text):
@@ -110,7 +111,7 @@ def parse_financial_amounts(text):
                 else: clean_amt = amt.replace(".", "")
             else: clean_amt = amt
             val = float(clean_amt)
-            if 1.0 <= val <= 1000.0 and val not in candidates: candidates.append(val)
+            if 1.0 <= val <= 2000.0 and val not in candidates: candidates.append(val)
         except ValueError: continue
 
     candidates = sorted(candidates, reverse=True)
@@ -155,139 +156,151 @@ def parse_financial_amounts(text):
 
     return total_brutto, mwst_19
 
-# --- 4단계: UI 및 배치 파일 핸들링 구동 ---
+
+# --- 4단계: UI 및 최적화된 연동 알고리즘 구동부 ---
 uploaded_files = st.file_uploader("Wählen Sie Rechnungen (PDF oder Bild)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 
+# 새로운 파일 묶음이 올라오면 이전 세션 데이터를 날리는 트리거 역할
 if uploaded_files:
-    receipt_data = []
+    file_batch_key = "".join([f.name for f in uploaded_files])
+    if "last_batch_key" not in st.session_state or st.session_state.last_batch_key != file_batch_key:
+        st.session_state.last_batch_key = file_batch_key
+        st.session_state.edited_receipts = None  # 초기화 보장
+
+    if st.session_state.edited_receipts is None:
+        receipt_data = []
+        with st.spinner("⚡ 독일 영수증 고속 분석 엔진 가동 중..."):
+            for uploaded_file in uploaded_files:
+                file_bytes = uploaded_file.read()
+                file_ext = uploaded_file.name.split('.')[-1].lower()
+                is_pdf = (file_ext == "pdf")
+                
+                # 💡 캐싱된 고속 OCR 함수 호출 (수정 시 재실행을 완벽 차단하여 멈춤 현상 해결)
+                raw_text = get_cached_ocr_text(uploaded_file.name, file_bytes, is_pdf)
+                
+                detected_date = advanced_date_parser(raw_text)
+                vendor = advanced_vendor_parser(raw_text)
+                total, mwst_19 = parse_financial_amounts(raw_text)
+                
+                date_str = detected_date
+                if "." in detected_date:
+                    try: date_str = datetime.strptime(detected_date, "%d.%m.%Y").strftime("%Y-%m-%d")
+                    except: pass
+                
+                vendor_clean = re.sub(r'[\\/*?:"<>|]', '', vendor).strip()
+                proposed_name = f"{date_str}_{vendor_clean}_{total:.2f}EUR.{file_ext}"
+                
+                receipt_data.append({
+                    "Rechnungsdatum": date_str, 
+                    "Verkäufer": vendor,
+                    "Brutto (€)": total, 
+                    "MwSt 19% (€)": mwst_19, 
+                    "Netto (€)": round(total - mwst_19, 2),
+                    "DATEV-Dateiname": proposed_name,
+                    "_FileExt": file_ext
+                })
+        
+        # 데이터프레임 구조화 및 세션 상태 보존
+        df_init = pd.DataFrame(receipt_data)
+        df_init.index = df_init.index + 1
+        df_init.index.name = "Nr."
+        st.session_state.edited_receipts = df_init
+
+    # 마스터 세션 데이터 참조
+    current_df = st.session_state.edited_receipts
+
+    st.markdown("---")
+    st.subheader("📊 Auswertungsübersicht (실시간 완벽 양방향 반영)")
+    st.info("💡 테이블의 셀을 더블클릭하여 수정하면 우측의 'DATEV-Dateiname'과 세금 연산이 즉시 실시간 변환됩니다.")
+
+    # 💡 2. 데이터 에디터 마운트 및 와이드 그리드 세팅
+    edited_df = st.data_editor(
+        current_df, 
+        use_container_width=True,
+        num_rows="fixed",
+        column_config={
+            "Rechnungsdatum": st.column_config.TextColumn("Rechnungsdatum", width="medium"),
+            "Verkäufer": st.column_config.TextColumn("Verkäufer", width="large"),
+            "Brutto (€)": st.column_config.NumberColumn("Brutto (€)", width="small", format="%.2f €"),
+            "MwSt 19% (€)": st.column_config.NumberColumn("MwSt 19% (€)", width="small", format="%.2f €"),
+            "Netto (€)": st.column_config.NumberColumn("Netto (€)", width="small", format="%.2f €"),
+            "DATEV-Dateiname": st.column_config.TextColumn("DATEV-Dateiname", width="max"),
+            "_FileExt": None
+        }
+    )
+
+    # 💡 3. [핵심 요구사항] 유저가 수정한 Verkäufer 및 금액 정보를 실시간 동적 재바인딩
+    edited_df["Netto (€)"] = (edited_df["Brutto (€)"] - edited_df["MwSt 19% (€)"]).round(2)
     
-    with st.expander("⚙️ 개별 파일별 OCR 텍스트 추출 및 변환 로그 확인 (필요할 때만 클릭해서 열기)", expanded=False):
-        for uploaded_file in uploaded_files:
-            file_bytes = uploaded_file.read()
-            file_ext = uploaded_file.name.split('.')[-1].lower()
-            
-            if file_ext == "pdf": raw_text = extract_text_from_pdf(file_bytes)
-            else: raw_text = extract_text_from_image(file_bytes)
-            
-            detected_date = advanced_date_parser(raw_text)
-            vendor = advanced_vendor_parser(raw_text)
-            total, mwst_19 = parse_financial_amounts(raw_text)
-            
-            date_str = detected_date
-            if "." in detected_date:
-                try: date_str = datetime.strptime(detected_date, "%d.%m.%Y").strftime("%Y-%m-%d")
-                except: pass
-            
-            vendor_clean = re.sub(r'[\\/*?:"<>|]', '', vendor).strip()
-            proposed_name = f"{date_str}_{vendor_clean}_{total:.2f}EUR.{file_ext}"
-            
-            st.write(f"📄 {uploaded_file.name} ➔ `{proposed_name}` 인식 완료")
-            st.code(raw_text, language="text")
-            
-            receipt_data.append({
-                "Rechnungsdatum": date_str, 
-                "Verkäufer": vendor,
-                "Brutto (€)": total, 
-                "MwSt 19% (€)": mwst_19, 
-                "Netto (€)": round(total - mwst_19, 2),
-                "DATEV-Dateiname": proposed_name,
-                "_FileExt": file_ext  # 동적 파일명 업데이트를 위한 확장자 임시 보존
-            })
+    updated_filenames = []
+    for idx, row in edited_df.iterrows():
+        v_clean = re.sub(r'[\\/*?:"<>|]', '', str(row["Verkäufer"])).strip()
+        # 사용자가 수정한 Verkäufer 명칭과 Brutto 금액을 바탕으로 동적 갱신 ⚡
+        new_name = f"{row['Rechnungsdatum']}_{v_clean}_{row['Brutto (€)']:.2f}EUR.{row['_FileExt']}"
+        updated_filenames.append(new_name)
         
-    if receipt_data:
-        df = pd.DataFrame(receipt_data)
-        df.index = df.index + 1
-        df.index.name = "Nr."
+    edited_df["DATEV-Dateiname"] = updated_filenames
+    
+    # 세션 상태 최신화 보장
+    st.session_state.edited_receipts = edited_df
+
+    # 내보내기용 임시 열 삭제 패킹
+    final_df_to_export = edited_df.drop(columns=["_FileExt"])
+
+    # 💡 4. 트윈 다운로드 버튼 구조 설계
+    col_dl1, col_dl2 = st.columns(2)
+    
+    # A. 프리미엄 엑셀 컴파일 아웃풋
+    import io
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    
+    openpyxl_buffer = io.BytesIO()
+    with pd.ExcelWriter(openpyxl_buffer, engine='openpyxl') as writer:
+        final_df_to_export.to_excel(writer, sheet_name="DATEV_Export", index=True)
+        workbook = writer.book
+        worksheet = writer.sheets["DATEV_Export"]
         
-        st.markdown("---")
-        st.subheader("📊 Auswertungsübersicht (데이터 직접 수정 가능)")
-        st.info("💡 영수증 인식에 오차가 있다면 아래 테이블의 셀을 **더블클릭**하여 직접 수정하세요. Verkäufer를 변경하면 DATEV-Dateiname도 연동되어 실시간으로 업데이트됩니다.")
+        header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+        header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+        header_alignment = Alignment(horizontal="center", vertical="center")
         
-        # 💡 [요구사항 1] 가로 크기에 맞춰 표 전체가 시원하게 보이도록 대시보드 컬럼 폭 지정 고도화
-        edited_df = st.data_editor(
-            df, 
-            use_container_width=True, # 화면 전체 폭 채우기
-            num_rows="fixed",
-            column_config={
-                "Rechnungsdatum": st.column_config.TextColumn("Rechnungsdatum", width="medium"),
-                "Verkäufer": st.column_config.TextColumn("Verkäufer", width="large"),
-                "Brutto (€)": st.column_config.NumberColumn("Brutto (€)", width="small", format="%.2f €"),
-                "MwSt 19% (€)": st.column_config.NumberColumn("MwSt 19% (€)", width="small", format="%.2f €"),
-                "Netto (€)": st.column_config.NumberColumn("Netto (€)", width="small", format="%.2f €"),
-                "DATEV-Dateiname": st.column_config.TextColumn("DATEV-Dateiname", width="max"), # 파일명 열 가로폭 최대 확장
-                "_FileExt": None # 사용자 화면에서 확장자 숨김
-            }
+        thin_border = Border(left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'), top=Side(style='thin', color='D9D9D9'), bottom=Side(style='medium', color='1F4E78'))
+        data_border = Border(left=Side(style='thin', color='E0E0E0'), right=Side(style='thin', color='E0E0E0'), top=Side(style='thin', color='E0E0E0'), bottom=Side(style='thin', color='E0E0E0'))
+        
+        for col_num in range(1, worksheet.max_column + 1):
+            cell = worksheet.cell(row=1, column=col_num)
+            cell.fill = header_fill; cell.font = header_font; cell.alignment = header_alignment; cell.border = thin_border
+        
+        for row in range(2, worksheet.max_row + 1):
+            for col in range(1, worksheet.max_column + 1):
+                cell = worksheet.cell(row=row, column=col)
+                cell.border = data_border
+                if col in [1, 2]: cell.alignment = Alignment(horizontal="center")
+                elif col in [4, 5, 6]: cell.alignment = Alignment(horizontal="right")
+        
+        for col in worksheet.columns:
+            max_len = 0
+            col_letter = col[0].column_letter
+            for cell in col:
+                if cell.value is not None: max_len = max(max_len, len(str(cell.value)))
+            worksheet.column_dimensions[col_letter].width = max(max_len + 4, 12)
+            
+    with col_dl1:
+        st.download_button(
+            label="📥 수정한 데이터로 고급 스타일 엑셀 다운로드 (.xlsx)",
+            data=openpyxl_buffer.getvalue(),
+            file_name=f"DATEV_Export_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
         )
         
-        # 💡 [요구사항 2] Verkäufer나 금액 수정 시 DATEV-Dateiname 및 Netto 동적 자동 재계산 연동
-        edited_df["Netto (€)"] = (edited_df["Brutto (€)"] - edited_df["MwSt 19% (€)"]).round(2)
-        
-        updated_filenames = []
-        for idx, row in edited_df.iterrows():
-            v_clean = re.sub(r'[\\/*?:"<>|]', '', str(row["Verkäufer"])).strip()
-            # 실시간 수정 반영된 데이터 기반 마스터 파일명 재조합
-            new_name = f"{row['Rechnungsdatum']}_{v_clean}_{row['Brutto (€)']:.2f}EUR.{row['_FileExt']}"
-            updated_filenames.append(new_name)
-            
-        edited_df["DATEV-Dateiname"] = updated_filenames
-        
-        # 다운로드 전 임시 확장자 컬럼 최종 제거
-        final_df_to_export = edited_df.drop(columns=["_FileExt"])
-        
-        # 💡 [요구사항 3] 가로로 나란히 배치된 Excel / CSV 트윈 다운로드 버튼 UI 설계
-        col_dl1, col_dl2 = st.columns(2)
-        
-        # 1. 엑셀 다운로드 (openpyxl 스타일화 포함)
-        import io
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-        
-        openpyxl_buffer = io.BytesIO()
-        with pd.ExcelWriter(openpyxl_buffer, engine='openpyxl') as writer:
-            final_df_to_export.to_excel(writer, sheet_name="DATEV_Export", index=True)
-            workbook = writer.book
-            worksheet = writer.sheets["DATEV_Export"]
-            
-            header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-            header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
-            header_alignment = Alignment(horizontal="center", vertical="center")
-            
-            thin_border = Border(left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'), top=Side(style='thin', color='D9D9D9'), bottom=Side(style='medium', color='1F4E78'))
-            data_border = Border(left=Side(style='thin', color='E0E0E0'), right=Side(style='thin', color='E0E0E0'), top=Side(style='thin', color='E0E0E0'), bottom=Side(style='thin', color='E0E0E0'))
-            
-            for col_num in range(1, worksheet.max_column + 1):
-                cell = worksheet.cell(row=1, column=col_num)
-                cell.fill = header_fill; cell.font = header_font; cell.alignment = header_alignment; cell.border = thin_border
-            
-            for row in range(2, worksheet.max_row + 1):
-                for col in range(1, worksheet.max_column + 1):
-                    cell = worksheet.cell(row=row, column=col)
-                    cell.border = data_border
-                    if col in [1, 2]: cell.alignment = Alignment(horizontal="center")
-                    elif col in [4, 5, 6]: cell.alignment = Alignment(horizontal="right")
-            
-            for col in worksheet.columns:
-                max_len = 0
-                col_letter = col[0].column_letter
-                for cell in col:
-                    if cell.value is not None: max_len = max(max_len, len(str(cell.value)))
-                worksheet.column_dimensions[col_letter].width = max(max_len + 4, 12)
-        
-        with col_dl1:
-            st.download_button(
-                label="📥 고급 스타일 엑셀 파일 다운로드 (.xlsx)",
-                data=openpyxl_buffer.getvalue(),
-                file_name=f"DATEV_Export_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-            
-        # 2. CSV 다운로드 (독일식 세무 시스템 및 범용 호환용 UTF-8-BOM 인코딩 적용)
-        csv_buffer = final_df_to_export.to_csv(index=True, encoding="utf-8-sig")
-        with col_dl2:
-            st.download_button(
-                label="📄 범용 CSV 파일 다운로드 (.csv)",
-                data=csv_buffer,
-                file_name=f"DATEV_Export_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+    # B. 세무 전용 범용 CSV 아웃풋
+    csv_buffer = final_df_to_export.to_csv(index=True, encoding="utf-8-sig")
+    with col_dl2:
+        st.download_button(
+            label="📄 수정한 데이터로 범용 CSV 다운로드 (.csv)",
+            data=csv_buffer,
+            file_name=f"DATEV_Export_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
