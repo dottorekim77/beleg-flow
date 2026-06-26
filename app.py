@@ -207,53 +207,65 @@ uploaded_files = st.file_uploader("Wählen Sie Rechnungen (PDF oder Bild)", type
 if uploaded_files:
     receipt_data = []
     
-    for uploaded_file in uploaded_files:
-        file_bytes = uploaded_file.read()
-        file_ext = uploaded_file.name.split('.')[-1].lower()
-        
-        if file_ext == "pdf":
-            raw_text = extract_text_from_pdf(file_bytes)
-        else:
-            raw_text = extract_text_from_image(file_bytes)
-        
-        detected_date = advanced_date_parser(raw_text)
-        vendor = advanced_vendor_parser(raw_text)
-        total, mwst_19 = parse_financial_amounts(raw_text)
-        
-        date_str = detected_date
-        if "." in detected_date:
-            try: 
-                date_str = datetime.strptime(detected_date, "%d.%m.%Y").strftime("%Y-%m-%d")
-            except: 
-                pass
-        
-        vendor_clean = re.sub(r'[\\/*?:"<>|]', '', vendor).strip()
-        proposed_name = f"{date_str}_{vendor_clean}_{total:.2f}EUR.{file_ext}"
-        
-        st.success(f"✔ {uploaded_file.name} ➔ **{proposed_name}**")
-        
-        with st.expander(f"🔍 [{uploaded_file.name}] 내부 인식 텍스트 로그"):
-            st.code(raw_text)
-        
-        receipt_data.append({
-            "Rechnungsdatum": date_str, 
-            "Verkäufer": vendor,
-            "Brutto (€)": total, 
-            "MwSt 19% (€)": mwst_19, 
-            "Netto (€)": round(total - mwst_19, 2),
-            "DATEV-Dateiname": proposed_name
-        })
+    # 💡 [요구사항 1] 화면을 깔끔하게 유지하기 위해 개별 변환 및 텍스트 로그를 이 익스팬더 안에 감춰둡니다.
+    with st.expander("⚙️ 개별 파일별 OCR 텍스트 추출 및 변환 로그 확인 (필요할 때만 클릭해서 열기)", expanded=False):
+        for uploaded_file in uploaded_files:
+            file_bytes = uploaded_file.read()
+            file_ext = uploaded_file.name.split('.')[-1].lower()
+            
+            if file_ext == "pdf":
+                raw_text = extract_text_from_pdf(file_bytes)
+            else:
+                raw_text = extract_text_from_image(file_bytes)
+            
+            detected_date = advanced_date_parser(raw_text)
+            vendor = advanced_vendor_parser(raw_text)
+            total, mwst_19 = parse_financial_amounts(raw_text)
+            
+            date_str = detected_date
+            if "." in detected_date:
+                try: 
+                    date_str = datetime.strptime(detected_date, "%d.%m.%Y").strftime("%Y-%m-%d")
+                except: 
+                    pass
+            
+            vendor_clean = re.sub(r'[\\/*?:"<>|]', '', vendor).strip()
+            proposed_name = f"{date_str}_{vendor_clean}_{total:.2f}EUR.{file_ext}"
+            
+            # 익스팬더 내부로 로그 메시지 격리
+            st.write(f"📄 {uploaded_file.name} ➔ `{proposed_name}` 인식 완료")
+            st.code(raw_text, language="text")
+            
+            receipt_data.append({
+                "Rechnungsdatum": date_str, 
+                "Verkäufer": vendor,
+                "Brutto (€)": total, 
+                "MwSt 19% (€)": mwst_19, 
+                "Netto (€)": round(total - mwst_19, 2),
+                "DATEV-Dateiname": proposed_name
+            })
         
     if receipt_data:
         df = pd.DataFrame(receipt_data)
         
-        # [요구사항 1] 표 번호가 0번이 아닌 1번부터 시작되도록 인덱스 보정
+        # 표 번호가 1번부터 시작되도록 인덱스 보정
         df.index = df.index + 1
         df.index.name = "Nr."
         
         st.markdown("---")
-        st.subheader("📊 Auswertungsübersicht")
-        st.dataframe(df, use_container_width=True)
+        st.subheader("📊 Auswertungsübersicht (데이터 직접 수정 가능)")
+        st.info("💡 영수증 인식에 오차가 있다면 아래 테이블의 셀을 **더블클릭**하여 직접 수정하세요. 수정된 내용이 엑셀에 그대로 반영됩니다.")
+        
+        # 💡 [요구사항 2] 정적 dataframe 대신 실시간 양방향 수정이 가능한 data_editor 탑재
+        edited_df = st.data_editor(
+            df, 
+            use_container_width=True,
+            num_rows="fixed" # 행 개수는 고정하고 셀 내부 데이터만 수정 가능하도록 설정
+        )
+        
+        # 사용자가 중간에 데이터를 고치면 Netto 금액을 자동으로 다시 계산해주는 동적 보정 로직 (선택사항)
+        # 만약 Brutto나 MwSt를 직접 바꿨을 때를 대비해 다운로드 직전 자동으로 최종 Netto 마감 계산을 쳐줍니다.
+        edited_df["Netto (€)"] = (edited_df["Brutto (€)"] - edited_df["MwSt 19% (€)"]).round(2)
         
         # --- 👑 스타일이 적용된 프리미엄 엑셀 내보내기 엔진 ---
         import io
@@ -262,14 +274,14 @@ if uploaded_files:
         # 메모리 버퍼 생성
         openpyxl_buffer = io.BytesIO()
         
-        # openpyxl 엔진을 사용하여 스타일 지정형 엑셀 파일 작성
+        # openpyxl 엔진을 사용하여 사용자가 '수정한 데이터(edited_df)'를 기준으로 엑셀 작성
         with pd.ExcelWriter(openpyxl_buffer, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name="DATEV_Export", index=True)
+            edited_df.to_excel(writer, sheet_name="DATEV_Export", index=True)
             
             workbook = writer.book
             worksheet = writer.sheets["DATEV_Export"]
             
-            # [요구사항 3] 첫 줄(헤더) 스타일 셋업: 짙은 네이비 배경 + 흰색 두꺼운 글씨
+            # 첫 줄(헤더) 스타일 셋업: 짙은 네이비 배경 + 흰색 두꺼운 글씨
             header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
             header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
             header_alignment = Alignment(horizontal="center", vertical="center")
@@ -308,7 +320,7 @@ if uploaded_files:
                     elif col in [4, 5, 6]:
                         cell.alignment = Alignment(horizontal="right")
             
-            # [요구사항 2] 셀 간격(열 너비) 자동 조절 알고리즘
+            # 셀 간격(열 너비) 자동 조절 알고리즘
             for col in worksheet.columns:
                 max_len = 0
                 col_letter = col[0].column_letter
@@ -319,7 +331,7 @@ if uploaded_files:
         
         # 엑셀 다운로드 버튼 배치
         st.download_button(
-            label="📥 고급 스타일 엑셀 파일 다운로드 (.xlsx)",
+            label="📥 현재 수정된 내용으로 고품질 엑셀 파일 다운로드 (.xlsx)",
             data=openpyxl_buffer.getvalue(),
             file_name=f"DATEV_Export_{datetime.now().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
