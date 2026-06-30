@@ -12,9 +12,9 @@ from pypdf import PdfReader, PdfWriter
 from PIL import Image
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 상수 / 설정
+# KONSTANTEN & CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
-PAGE_TITLE      = "DE Beleg-Parser Pro AI"
+PAGE_TITLE      = "DATEV Beleg-Parser Pro AI"
 PAGE_ICON       = "🧾"
 GEMINI_MODEL    = "gemini-3.1-flash-lite"   
 FREE_TIER_DELAY = 4.2                        
@@ -34,25 +34,25 @@ Z_CODE_MAP      = {"Firmenkonto": "BANK", "Mastercard": "CC"}
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Streamlit 페이지 설정 (사이드바 미사용, 넓은 메인 화면만 사용)
+# STREAMLIT PAGE SETUP
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v3.0-Production Ready)")
-st.caption("환율 입력 제거 및 실제 송금 유로화(EUR) 수동 입력 기반 실시간 역산 엔진 탑재 버전.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v3.1 - DATEV-Native)")
+st.caption("Automatisierte Belegerfassung mit Sandwich-PDF-Generierung und SKR-Klassifizierung für den Steuerberater.")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# API 키 인증 (깔끔하게 메인 상단 노출 혹은 Secrets 활용)
+# API AUTHENTIFIZIERUNG
 # ══════════════════════════════════════════════════════════════════════════════
 API_KEY: str = st.secrets.get("GEMINI_API_KEY", "")
 if not API_KEY:
-    API_KEY = st.text_input("🔑 Gemini API Key를 입력하세요", type="password")
+    API_KEY = st.text_input("🔑 Gemini API-Key eingeben", type="password")
     if API_KEY:
         genai.configure(api_key=API_KEY)
 else:
     genai.configure(api_key=API_KEY)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 백엔드 코어 함수
+# BACKEND ENGINE FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def create_sandwich_pdf(file_bytes: bytes, ext: str, raw_ai_text: str) -> bytes:
@@ -75,12 +75,12 @@ def create_sandwich_pdf(file_bytes: bytes, ext: str, raw_ai_text: str) -> bytes:
         writer.add_metadata({
             "/Title": "DATEV Searchable Beleg via AI",
             "/Subject": raw_ai_text.replace("\n", " "),
-            "/Keywords": "DATEV, OCR, SandwichPDF"
+            "/Keywords": "DATEV, OCR, SandwichPDF, Searchable"
         })
         output_buf = io.BytesIO()
         writer.write(output_buf)
         return output_buf.getvalue()
-    except Exception as e:
+    except Exception:
         return file_bytes
 
 def sanitize_filename(text: str) -> str:
@@ -96,47 +96,47 @@ def build_datev_filename(
     inv_suffix = f"-I{sanitize_filename(inv_nr)[:8]}" if inv_nr and inv_nr.lower() not in ("", "none") else ""
     
     date_compact = date_str.replace("-", "")
-    return f"{date_compact}_{v_clean}_{brutto_eur:.2f}€_{z_code}{b_suffix}{inv_suffix}.pdf"
+    return f"{date_compact}_{v_clean}_{brutto_eur:.2f}EUR_{z_code}{b_suffix}{inv_suffix}.pdf"
 
 def get_gemini_prompt(skr_mode: str) -> str:
     if skr_mode == "SKR03":
         skr_guide = """
-   - 3400 (Wareneinkauf / 한국 수출용 또는 재판매용 상품 매입)
-   - 8120 (Steuerfreie Umsätze / 한국 고객 대상 부가세 0% 면세 수출 매출 전표)
-   - 4930 (Bürobedarf / 내부 사무실 소비용 필기구, 일회성 전자기기 등)
-   - 4980 (Betriebsbedarf / 기타 소모품)
-   - 4530 (Laufende Kfz-Betriebskosten / 차량유지비-주유 등)
-   - 4660 (Reisekosten / 여비교통비)
-   - 4400 (Gebühren / 서비스 이용료/수수료)"""
+   - 3400 (Wareneinkauf)
+   - 8120 (Steuerfreie Umsätze § 4 Nr. 1a UStG / Drittland-Export)
+   - 4930 (Bürobedarf)
+   - 4980 (Betriebsbedarf)
+   - 4530 (Laufende Kfz-Betriebskosten)
+   - 4660 (Reisekosten)
+   - 4400 (Gebühren)"""
     else:
         skr_guide = """
-   - 5400 (Wareneinkauf / 한국 수출용 또는 재판매용 상품 매입)
-   - 4120 (Steuerfreie Umsätze / 한국 고객 대상 부가세 0% 면세 수출 매출 전표)
-   - 6815 (Bürobedarf / 내부 사무실 소비용 필기구, 일회성 전자기기 등)
-   - 6300 (Sonstige betriebliche Aufwendungen / 기타 소모품)
-   - 6520 (Laufende Kfz-Betriebskosten / 차량유지비-주유 등)
-   - 6650 (Reisekosten / 여비교통비)
-   - 6855 (Gebühren / 서비스 이용료/수수료)"""
+   - 5400 (Wareneinkauf)
+   - 4120 (Steuerfreie Umsätze § 4 Nr. 1a UStG / Drittland-Export)
+   - 6815 (Bürobedarf)
+   - 6300 (Sonstige betriebliche Aufwendungen)
+   - 6520 (Laufende Kfz-Betriebskosten)
+   - 6650 (Reisekosten)
+   - 6855 (Gebühren)"""
 
     return f"""
-너는 독일 세무 회계(Steuerwesen) 및 제3국 수출(Drittland-Export) 무역 전표 처리 전문가야.
-제공된 영수증/인보이스를 철저히 분석하여 아래 규칙에 맞게 정확한 정보를 추출해줘.
+Du bist ein Experte für deutsche Finanzbuchhaltung (Steuerwesen) und Belegverarbeitung nach DATEV-Standard.
+Analysiere den bereitgestellten Beleg/Rechnung präzise und extrahiere die folgenden Informationen.
 
-1. Rechnungsnummer: 영수증/인보이스 번호
-2. Rechnungsdatum: YYYY-MM-DD 형식의 발행일
-3. Verkäufer: 발행 회사명 (최대 12자 내외의 핵심 식별 단어)
-4. Bruttobetrag: 총 합계 금액 (숫자만, 소수점은 반드시 마침표 '.' 사용)
-5. Währung: EUR 또는 USD
-6. Kategorie_SKR: 독일 표준 {skr_mode} 계정 과목 중 하나를 매핑해줘.{skr_guide}
-7. MwSt_Type: 부가세 내역을 확인하여 "Split", "19_Only", "7_Only", "0_Only", "AUTO_19" 중 하나로 매핑해줘.
+1. Rechnungsnummer: Rechnungs- oder Belegnummer
+2. Rechnungsdatum: Ausstellungsdatum im Format YYYY-MM-DD
+3. Verkäufer: Name des Kreditors/Unternehmens (max. 12 Zeichen, prägnant)
+4. Bruttobetrag: Gesamtsumme (nur Zahlen, Dezimaltrenner als Punkt '.')
+5. Währung: EUR oder USD
+6. Kategorie_SKR: Ordne den Beleg einem der folgenden {skr_mode}-Konten zu. Gib Code und Bezeichnung an.{skr_guide}
+7. MwSt_Type: Identifiziere den Steuersatz ("Split", "19_Only", "7_Only", "0_Only", "AUTO_19").
 
-[출력 포맷 — 아래 7줄 외 절대 다른 텍스트 금지, 빈 값은 None 표기]
-Beleg_Nr: [번호]
+[AUSGABEFORMAT — Nur diese 7 Zeilen ohne zusätzlichen Text ausgeben, leere Werte als None]
+Beleg_Nr: [Nummer]
 Datum: [YYYY-MM-DD]
-Vendor: [회사명]
-Total: [숫자.소수점2자리]
-Currency: [EUR 또는 USD]
-Kategorie: [예시 구조 코드 - 이름]
+Vendor: [Name]
+Total: [Zahl.00]
+Currency: [EUR / USD]
+Kategorie: [Code - Bezeichnung]
 MwSt_Type: [19_Only / 7_Only / Split / AUTO_19 / 0_Only]
 """
 
@@ -164,7 +164,7 @@ def ask_gemini_vision(file_bytes: bytes, mime_type: str, skr_mode: str) -> tuple
         
         beleg_nr, d_str, ven, tot, cur, kat, m_type = _parse_gemini_response(response.text, default_cat)
         return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text
-    except Exception as exc:
+    except Exception:
         return fallback
 
 def _parse_gemini_response(text: str, default_cat: str) -> tuple:
@@ -208,7 +208,7 @@ def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple[float, flo
     return mwst_19, mwst_7, netto
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [보완 핵심] 사용자가 Brutto (EUR)를 수정하면 MwSt/Netto/Datev파일명을 즉시 역산
+# REKALKULATION BEI MANUELLER ÄNDERUNG (Z.B. BANKKONTO-ABGLEICH FÜR USD-BELEGE)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def on_table_edited() -> None:
@@ -223,8 +223,7 @@ def on_table_edited() -> None:
         for col, new_val in changes.items():
             df.at[label, col] = new_val
 
-        # 미국 건이든 유로 건이든 최종 세무 기준인 Brutto (EUR) 기준으로 세액 역산 처리
-        brutto_eur = float(df.at[label, "Brutto (EUR)"])
+        brutto_eur = float(df.at[label, "Gebuchter Bruttobetrag (EUR)"])
         m_type     = str(df.at[label, "MwSt_Type"])
 
         mwst_19, mwst_7, netto = calculate_tax_details(brutto_eur, m_type)
@@ -232,7 +231,6 @@ def on_table_edited() -> None:
         df.at[label, "MwSt 7% (EUR)"]  = mwst_7
         df.at[label, "Netto (EUR)"]    = netto
 
-        # DATEV 파일명도 사장님이 바꾼 최종 EUR 금액 기반으로 동적 갱신
         df.at[label, "DATEV-Dateiname"] = build_datev_filename(
             str(df.at[label, "Rechnungsdatum"]), str(df.at[label, "Verkäufer"]), brutto_eur,
             str(df.at[label, "Zahlart"]), str(df.at[label, "Beleg_Nr"]), str(df.at[label, "Verknüpfte_INV"])
@@ -268,16 +266,16 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# UI 메인 제어 그리드
+# MAIN BENUTZEROBERFLÄCHE (UI)
 # ══════════════════════════════════════════════════════════════════════════════
 
-uploaded_files = st.file_uploader("📂 매입 영수증 및 매출 Invoice 파일들을 함께 올려주세요", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📂 Belege und Rechnungen hochladen (PDF, PNG, JPG, JPEG)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 
 col_cfg1, col_cfg2 = st.columns(2)
 with col_cfg1:
-    default_zahlart: str = st.radio("⚙️ 기본 결제수단 지정", options=ZAHLART_OPTIONS, index=0, horizontal=True)
+    default_zahlart: str = st.radio("⚙️ Standard-Zahlungsweg", options=ZAHLART_OPTIONS, index=0, horizontal=True)
 with col_cfg2:
-    selected_skr: str = st.radio("📊 세무사 지정 계정계 (Standardkontenrahmen)", options=["SKR03", "SKR04"], index=0, horizontal=True)
+    selected_skr: str = st.radio("📊 Standardkontenrahmen (SKR)", options=["SKR03", "SKR04"], index=0, horizontal=True)
 
 if uploaded_files:
     batch_key = "".join(f.name for f in uploaded_files) + f"_{selected_skr}"
@@ -290,7 +288,7 @@ if uploaded_files:
         total_files = len(uploaded_files)
         progress_bar = st.progress(0)
 
-        with st.spinner(f"🔮 영수증 컨텍스트 판독 엔진 가동 중..."):
+        with st.spinner("🔮 Verarbeite Dokumente via Kognitiver AI-Engine..."):
             for idx, uploaded_file in enumerate(uploaded_files):
                 file_bytes = uploaded_file.read()
                 ext        = uploaded_file.name.rsplit(".", 1)[-1].lower()
@@ -298,16 +296,15 @@ if uploaded_files:
 
                 beleg_nr, date_str, vendor, total, currency, kategorie, mwst_type, raw_text = ask_gemini_vision(file_bytes, mime_type, selected_skr)
 
-                # 초기 로드 시 대략적인 가이드용으로 1:1 매핑 후, 미국 건은 사용자가 수동 패치 유도
                 brutto_eur = total  
                 mwst_19, mwst_7, netto = calculate_tax_details(brutto_eur, mwst_type)
 
                 rows.append({
                     "Rechnungsdatum":  date_str,
                     "Verkäufer":        vendor,
-                    f"Kategorie ({selected_skr})": kategorie,
-                    "Brutto (원본)":    f"{total:,.2f} $" if currency == "USD" else f"{total:,.2f} €", 
-                    "Brutto (EUR)":    brutto_eur,      # 💡 사장님이 송금 영수증을 보고 직접 고칠 메인 타겟
+                    f"Buchungskonto ({selected_skr})": kategorie,
+                    "Beleg-Betrag (Original)": f"{total:,.2f} $" if currency == "USD" else f"{total:,.2f} €", 
+                    "Gebuchter Bruttobetrag (EUR)": brutto_eur,      
                     "MwSt 19% (EUR)":  mwst_19,
                     "MwSt 7% (EUR)":   mwst_7,
                     "Netto (EUR)":      netto,
@@ -327,7 +324,7 @@ if uploaded_files:
         st.session_state.edited_receipts.index.name = "Nr."
 
     # ══════════════════════════════════════════════════════════════════════════════
-    # 초슬림형 데이터 에디터 테이블 뷰 렌더링
+    # INTERAKTIVE DATEV-ERFASSUNGSMASKE (DATA EDITOR)
     # ══════════════════════════════════════════════════════════════════════════════
     st.data_editor(
         st.session_state.edited_receipts,
@@ -337,28 +334,28 @@ if uploaded_files:
         key="beleg_editor_key",
         on_change=on_table_edited,
         column_config={
-            f"Kategorie ({selected_skr})": st.column_config.TextColumn(f"🧾 {selected_skr} 과목", width="medium"),
-            "Brutto (원본)":    st.column_config.TextColumn("Brutto (AI 판독 원본)", disabled=True), # 수정 불가 가이드라인
-            "Brutto (EUR)":    st.column_config.NumberColumn("Brutto (실제 송금액 EUR)", format="%,.2f €", help="미국 달러 건은 은행 앱에 찍힌 실제 나간 유로화 금액을 여기 직접 기입하세요."),
-            "MwSt 19% (EUR)":  st.column_config.NumberColumn("MwSt 19%", format="%,.2f €"),
-            "MwSt 7% (EUR)":   st.column_config.NumberColumn("MwSt 7%", format="%,.2f €"),
-            "Netto (EUR)":     st.column_config.NumberColumn("Netto (EUR)", format="%,.2f €"),
-            "MwSt_Type":       st.column_config.SelectboxColumn("Tax Type", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
-            "Verknüpfte_INV":  st.column_config.TextColumn("🔗 연관 매출INV (수출 짝매칭 번호)"),
-            "DATEV-Dateiname": st.column_config.TextColumn("DATEV 확정 파일명", width="max"),
+            f"Buchungskonto ({selected_skr})": st.column_config.TextColumn(f"🧾 Gegenkonto ({selected_skr})", width="medium"),
+            "Beleg-Betrag (Original)":    st.column_config.TextColumn("Beleg-Soll (Original)", disabled=True), 
+            "Gebuchter Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €", help="Bei USD-Belegen tragen Sie hier bitte den tatsächlichen Belastungsbetrag laut Bankkontoauszug ein."),
+            "MwSt 19% (EUR)":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
+            "MwSt 7% (EUR)":   st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
+            "Netto (EUR)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
+            "MwSt_Type":       st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
+            "Verknüpfte_INV":  st.column_config.TextColumn("🔗 Verknüpfte Ausgangs-INV (Export-Matching)"),
+            "DATEV-Dateiname": st.column_config.TextColumn("Zukünftiger DATEV-Dateiname", width="max"),
             "_FileExt":        None, "_RawBytes": None, "_OcrText": None
         },
     )
 
-    # 아카이브 다운로드 레이어
+    # EXPORT-BEREICH
     df_final = st.session_state.edited_receipts
     today = datetime.now().strftime("%Y%m%d")
 
-    st.markdown("### 📥 세무사 제출용 최종 아웃풋 파일 아카이브 생성")
+    st.markdown("### 📥 Bereitstellung der DATEV-Exportdateien")
     col_dl1, col_dl2 = st.columns(2)
     
     with col_dl1:
-        st.download_button(label=f"📊 {selected_skr} 매핑형 정밀 Excel 다운로드 (.xlsx)", data=build_excel_bytes(df_final), file_name=f"DATEV_{selected_skr}_Export_{today}.xlsx", use_container_width=True)
+        st.download_button(label=f"📊 Buchungsliste als Excel-Export herunterladen (.xlsx)", data=build_excel_bytes(df_final), file_name=f"DATEV_{selected_skr}_Buchungsliste_{today}.xlsx", use_container_width=True)
         
     with col_dl2:
         zip_buffer = io.BytesIO()
@@ -373,4 +370,4 @@ if uploaded_files:
                 zip_file.writestr(target_filename, sandwich_pdf_bytes)
                 
         zip_buffer.seek(0)
-        st.download_button(label="📁 OCR 샌드위치 PDF 일괄 변환 ZIP 파일 다운로드 (.zip)", data=zip_buffer.getvalue(), file_name=f"DATEV_Belege_Package_{today}.zip", use_container_width=True, type="primary")
+        st.download_button(label="📁 PDF-Belege (Searchable Sandwich-PDFs) als ZIP-Archiv herunterladen (.zip)", data=zip_buffer.getvalue(), file_name=f"DATEV_Digitale_Belege_{today}.zip", use_container_width=True, type="primary")
