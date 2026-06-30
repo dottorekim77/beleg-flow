@@ -369,7 +369,7 @@ if uploaded_files:
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
-    # 인터랙티브 에디터 그리드 출력
+# 인터랙티브 에디터 그리드 출력
     st.data_editor(
         st.session_state.edited_receipts,
         use_container_width=True,
@@ -385,7 +385,8 @@ if uploaded_files:
             "MwSt 7% (EUR)":   st.column_config.NumberColumn("MwSt 7%", format="%,.2f €"),
             "Netto (EUR)":     st.column_config.NumberColumn("Netto (EUR)", format="%,.2f €"),
             "MwSt_Type":       st.column_config.SelectboxColumn("Tax Type", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
-            "Verknüpfte_INV":  st.column_config.TextColumn("🔗 연관 매출INV", placeholder="수출 짝매칭용 번호 입력"),
+            # 🛠️ [긴급수정] placeholder 제거하여 하위 버전 호환성 확보 및 에러 차단
+            "Verknüpfte_INV":  st.column_config.TextColumn("🔗 연관 매출INV (수출 짝매칭 번호)"),
             "DATEV-Dateiname": st.column_config.TextColumn("DATEV 확정 파일명", width="max"),
             "_FileExt":        None, "_RawBytes": None, "_OcrText": None
         },
