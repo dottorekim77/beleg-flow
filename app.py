@@ -40,8 +40,8 @@ _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 # Streamlit 페이지 설정
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v2.6-Dual SKR Engine)")
-st.caption("독일 표준 세무 계정 SKR03 및 SKR04 동적 전환 매핑 허브 및 다중 부가세 분리 시스템.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v2.7-Context Aware)")
+st.caption("독일 세무 회계 비용 vs 수출용 상품매입 Context 추론 모델 탑재 버전.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # API 키 로드
@@ -83,35 +83,34 @@ def build_datev_filename(
     return f"{date_compact}_{v_clean}_{brutto:.2f}{c_symbol}_{z_code}{b_suffix}{inv_suffix}.{ext}"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SKR03 / SKR04 동적 프롬프트 매핑 가이드 레이어
+# [보완 핵심] SKR03 / SKR04 문맥 인식형 프롬프트 생성 레이어
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_gemini_prompt(skr_mode: str) -> str:
-    """사용자가 고른 SKR 모드에 따라 맞춤형 가이드라인 프롬프트를 동적으로 생성합니다."""
+    """사용자가 고른 SKR 모드와 비즈니스 문맥(비용 vs 상품매입) 가이드를 동적으로 결합합니다."""
     if skr_mode == "SKR03":
         skr_guide = """
-   - 4930 (Bürobedarf / 사무용품)
-   - 4960 (Miete/Pacht / 임차료)
-   - 4650 (Bewirtungskosten / 접대비)
-   - 4660 (Reisekosten / 여비교통비)
+   - 3400 (Wareneinkauf / 한국 수출용 또는 재판매용 상품 매입) -> 중요: 동일 품목 대량 구매나 커스텀 오더 징후가 보일 때 매핑
+   - 4930 (Bürobedarf / 내부 사무실 소비용 필기구, 일회성 전자기기 등)
+   - 4980 (Betriebsbedarf / 기타 소모품)
    - 4530 (Laufende Kfz-Betriebskosten / 차량유지비-주유 등)
-   - 4920 (Telefon/Internet / 통신비)
-   - 4400 (Gebühren / 수수료/서비스이용료)
-   - 4980 (Betriebsbedarf / 기타 소모품)"""
+   - 4660 (Reisekosten / 여비교통비)
+   - 4400 (Gebühren / 서비스 이용료/수수료)"""
     else:
         skr_guide = """
-   - 6815 (Bürobedarf / 사무용품)
-   - 6310 (Miete/Pacht / 임차료)
-   - 6640 (Bewirtungskosten / 접대비)
-   - 6650 (Reisekosten / 여비교통비)
+   - 5400 (Wareneinkauf / 한국 수출용 또는 재판매용 상품 매입) -> 중요: 동일 품목 대량 구매나 커스텀 오더 징후가 보일 때 매핑
+   - 6815 (Bürobedarf / 내부 사무실 소비용 필기구, 일회성 전자기기 등)
+   - 6300 (Sonstige betriebliche Aufwendungen / 기타 소모품)
    - 6520 (Laufende Kfz-Betriebskosten / 차량유지비-주유 등)
-   - 6805 (Telefon/Internet / 통신비)
-   - 6855 (Gebühren / 수수료/서비스이용료)
-   - 6300 (Sonstige betriebliche Aufwendungen / 기타 소모품)"""
+   - 6650 (Reisekosten / 여비교통비)
+   - 6855 (Gebühren / 서비스 이용료/수수료)"""
 
     return f"""
-너는 독일 세무 회계(Steuerwesen) 및 DATEV 시스템 전문가야.
-제공된 문서를 분석하여 아래 규칙에 맞게 정확한 정보를 추출해줘.
+너는 독일 세무 회계(Steuerwesen) 및 제3국 수출(Drittland-Export) 무역 전표 처리 전문가야.
+제공된 영수증/인보이스를 철저히 분석하여 아래 규칙에 맞게 정확한 정보를 추출해줘.
+
+[판독 및 추론 지침]
+- **문맥 판독(Context-Aware):** 만약 아마증(Amazon) 등에서 구매한 영수증이라도, 특정 제품이 대량(Volume)으로 찍혀있거나, 사업자(사장님)의 고유 비즈니스 물품(예: 한국 고객 대행 주문 등)으로 추정되는 경우, 단순 비용인 Bürobedarf 대신 반드시 **Wareneinkauf(상품매입)** 코드로 분류해줘. 반면, 소량의 문구류나 단발성 집기는 Bürobedarf로 분류해라.
 
 1. Rechnungsnummer: 영수증/인보이스 번호
 2. Rechnungsdatum: YYYY-MM-DD 형식의 발행일
@@ -275,11 +274,9 @@ col_cfg1, col_cfg2 = st.columns(2)
 with col_cfg1:
     default_zahlart: str = st.radio("⚙️ 기본 결제수단", options=ZAHLART_OPTIONS, index=0, horizontal=True)
 with col_cfg2:
-    # 🎯 핵심 튜닝: 사용자가 원하는 표준 계정과목 풀 선택 가능하게 추가!
     selected_skr: str = st.radio("📊 세무 계정 기준 (Standardkontenrahmen)", options=["SKR03", "SKR04"], index=0, horizontal=True)
 
 if uploaded_files:
-    # 사용자가 배치를 바꾸거나 SKR 모드를 바꾸면 캐시 강제 리셋 후 재판독 유도
     batch_key = "".join(f.name for f in uploaded_files) + f"_{selected_skr}"
     if st.session_state.get("last_batch_key") != batch_key:
         st.session_state.last_batch_key = batch_key
@@ -290,13 +287,12 @@ if uploaded_files:
         total_files = len(uploaded_files)
         progress_bar = st.progress(0)
 
-        with st.spinner(f"🔮 비전 AI가 {selected_skr} 계정 과목 및 다중 부가세를 판독하는 중..."):
+        with st.spinner(f"🔮 비전 AI가 문맥을 분석하여 {selected_skr} 매핑 중..."):
             for idx, uploaded_file in enumerate(uploaded_files):
                 file_bytes = uploaded_file.read()
                 ext        = uploaded_file.name.rsplit(".", 1)[-1].lower()
                 mime_type  = MIME_MAP.get(ext, "application/octet-stream")
 
-                # 동적 지정된 SKR 모드로 AI 연동 실행
                 beleg_nr, date_str, vendor, total, currency, kategorie, mwst_type = ask_gemini_vision(file_bytes, mime_type, selected_skr)
 
                 brutto_eur = round(total * usd_to_eur_rate, 2) if currency == "USD" else total
@@ -305,7 +301,7 @@ if uploaded_files:
                 rows.append({
                     "Rechnungsdatum":  date_str,
                     "Verkäufer":        vendor,
-                    f"Kategorie ({selected_skr})": kategorie, # 헤더 이름도 동적으로 스위칭
+                    f"Kategorie ({selected_skr})": kategorie,
                     "Währung":          currency,
                     "Brutto":          total,
                     "Brutto (EUR)":    brutto_eur,
@@ -315,7 +311,7 @@ if uploaded_files:
                     "Zahlart":          default_zahlart,
                     "MwSt_Type":        mwst_type,
                     "Beleg_Nr":        beleg_nr,
-                    "Verknüpfte_INV":  "",
+                    "Verknüpfte_INV":  "",  # 💡 한국 고객용 매출 인보이스 번호 연동을 위한 빈 칸 마련
                     "DATEV-Dateiname": build_datev_filename(date_str, vendor, total, currency, default_zahlart, beleg_nr, "", ext),
                     "_FileExt": ext,
                 })
@@ -341,6 +337,7 @@ if uploaded_files:
             "MwSt 7% (EUR)":   st.column_config.NumberColumn("MwSt 7%", format="%,.2f €"),
             "Netto (EUR)":     st.column_config.NumberColumn("Netto (EUR)", format="%,.2f €"),
             "MwSt_Type":       st.column_config.SelectboxColumn("Tax Type", options=["19_Only", "7_Only", "Split", "AUTO_19"], width="small"),
+            "Verknüpfte_INV":  st.column_config.TextColumn("🔗 연관 매출INV 번호", placeholder="예: INV-001 (수출용 입력)"),
             "DATEV-Dateiname": st.column_config.TextColumn("DATEV 파일명", width="max"),
             "_FileExt":        None,
         },
