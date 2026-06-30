@@ -21,12 +21,6 @@ FREE_TIER_DELAY = 4.2
 MWST_19_FACTOR  = 19 / 119
 MWST_7_FACTOR   = 7 / 107
 
-# 💡 통화 심볼 매핑 딕셔너리
-CURRENCY_META = {
-    "EUR": "€",
-    "USD": "$",
-}
-
 MIME_MAP = {
     "pdf":  "application/pdf",
     "jpg":  "image/jpeg",
@@ -40,32 +34,25 @@ Z_CODE_MAP      = {"Firmenkonto": "BANK", "Mastercard": "CC"}
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Streamlit 페이지 설정
+# Streamlit 페이지 설정 (사이드바 미사용, 넓은 메인 화면만 사용)
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v2.9-Currency Unified)")
-st.caption("Brutto 원본 금액에 통화 심볼을 즉각 병합하여 직관성을 극대화한 DATEV 마스터 에디션.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v3.0-Production Ready)")
+st.caption("환율 입력 제거 및 실제 송금 유로화(EUR) 수동 입력 기반 실시간 역산 엔진 탑재 버전.")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# API 키 및 기본 세팅
+# API 키 인증 (깔끔하게 메인 상단 노출 혹은 Secrets 활용)
 # ══════════════════════════════════════════════════════════════════════════════
-API_KEY: str = st.secrets.get("GEMINI_API_KEY", "") or st.sidebar.text_input(
-    "Gemini API Key", type="password"
-)
-
-if API_KEY:
-    genai.configure(api_key=API_KEY)
+API_KEY: str = st.secrets.get("GEMINI_API_KEY", "")
+if not API_KEY:
+    API_KEY = st.text_input("🔑 Gemini API Key를 입력하세요", type="password")
+    if API_KEY:
+        genai.configure(api_key=API_KEY)
 else:
-    st.sidebar.warning("⚠️ Streamlit Secrets에 GEMINI_API_KEY를 설정하거나 왼쪽에 직접 입력해 주세요.")
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("💱 환율 설정 (USD → EUR)")
-usd_to_eur_rate: float = st.sidebar.number_input(
-    "1 USD = ? EUR", min_value=0.01, max_value=10.0, value=0.92, step=0.001, format="%.4f"
-)
+    genai.configure(api_key=API_KEY)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 샌드위치 PDF 생성 엔진 및 헬퍼 함수
+# 백엔드 코어 함수
 # ══════════════════════════════════════════════════════════════════════════════
 
 def create_sandwich_pdf(file_bytes: bytes, ext: str, raw_ai_text: str) -> bytes:
@@ -94,24 +81,22 @@ def create_sandwich_pdf(file_bytes: bytes, ext: str, raw_ai_text: str) -> bytes:
         writer.write(output_buf)
         return output_buf.getvalue()
     except Exception as e:
-        st.sidebar.error(f"Sandwich PDF 생성 실패: {e}")
         return file_bytes
 
 def sanitize_filename(text: str) -> str:
     return _ILLEGAL_CHARS.sub("", text).strip()
 
 def build_datev_filename(
-    date_str: str, vendor: str, brutto: float, currency: str, zahlart: str, beleg_nr: str, inv_nr: str
+    date_str: str, vendor: str, brutto_eur: float, zahlart: str, beleg_nr: str, inv_nr: str
 ) -> str:
     z_code = "B" if Z_CODE_MAP.get(zahlart, "BANK") == "BANK" else "C"
-    c_symbol = "$" if currency == "USD" else "€"
     v_clean = sanitize_filename(vendor).replace(" ", "")[:10]
     
     b_suffix = f"_{sanitize_filename(beleg_nr)[:12]}" if beleg_nr and beleg_nr.lower() not in ("", "none") else ""
     inv_suffix = f"-I{sanitize_filename(inv_nr)[:8]}" if inv_nr and inv_nr.lower() not in ("", "none") else ""
     
     date_compact = date_str.replace("-", "")
-    return f"{date_compact}_{v_clean}_{brutto:.2f}{c_symbol}_{z_code}{b_suffix}{inv_suffix}.pdf"
+    return f"{date_compact}_{v_clean}_{brutto_eur:.2f}€_{z_code}{b_suffix}{inv_suffix}.pdf"
 
 def get_gemini_prompt(skr_mode: str) -> str:
     if skr_mode == "SKR03":
@@ -155,10 +140,6 @@ Kategorie: [예시 구조 코드 - 이름]
 MwSt_Type: [19_Only / 7_Only / Split / AUTO_19 / 0_Only]
 """
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 백엔드 엔진 코어 및 실시간 테이블 업데이트 트리거
-# ══════════════════════════════════════════════════════════════════════════════
-
 def _parse_german_amount(raw: str) -> float:
     s = re.sub(r"[€$£\s]", "", raw)
     s = re.sub(r"(?i)(eur|usd|gbp)", "", s).strip()
@@ -184,7 +165,6 @@ def ask_gemini_vision(file_bytes: bytes, mime_type: str, skr_mode: str) -> tuple
         beleg_nr, d_str, ven, tot, cur, kat, m_type = _parse_gemini_response(response.text, default_cat)
         return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text
     except Exception as exc:
-        st.sidebar.error(f"❌ Gemini API 오류: {exc}")
         return fallback
 
 def _parse_gemini_response(text: str, default_cat: str) -> tuple:
@@ -228,7 +208,7 @@ def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple[float, flo
     return mwst_19, mwst_7, netto
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [보완 핵심] 데이터 수정 시 통화 병합 상태 유지 로직
+# [보완 핵심] 사용자가 Brutto (EUR)를 수정하면 MwSt/Netto/Datev파일명을 즉시 역산
 # ══════════════════════════════════════════════════════════════════════════════
 
 def on_table_edited() -> None:
@@ -243,21 +223,18 @@ def on_table_edited() -> None:
         for col, new_val in changes.items():
             df.at[label, col] = new_val
 
-        # 데이터 수정 시 내부 원본 보관 통화(Währung_Hidden)를 참조해 계산 진행
-        currency = str(df.at[label, "Währung_Hidden"])
-        brutto   = float(df.at[label, "Brutto"])
-        m_type   = str(df.at[label, "MwSt_Type"])
-
-        brutto_eur = round(brutto * usd_to_eur_rate, 2) if currency == "USD" else brutto
-        df.at[label, "Brutto (EUR)"] = brutto_eur
+        # 미국 건이든 유로 건이든 최종 세무 기준인 Brutto (EUR) 기준으로 세액 역산 처리
+        brutto_eur = float(df.at[label, "Brutto (EUR)"])
+        m_type     = str(df.at[label, "MwSt_Type"])
 
         mwst_19, mwst_7, netto = calculate_tax_details(brutto_eur, m_type)
         df.at[label, "MwSt 19% (EUR)"] = mwst_19
         df.at[label, "MwSt 7% (EUR)"]  = mwst_7
         df.at[label, "Netto (EUR)"]    = netto
 
+        # DATEV 파일명도 사장님이 바꾼 최종 EUR 금액 기반으로 동적 갱신
         df.at[label, "DATEV-Dateiname"] = build_datev_filename(
-            str(df.at[label, "Rechnungsdatum"]), str(df.at[label, "Verkäufer"]), brutto, currency,
+            str(df.at[label, "Rechnungsdatum"]), str(df.at[label, "Verkäufer"]), brutto_eur,
             str(df.at[label, "Zahlart"]), str(df.at[label, "Beleg_Nr"]), str(df.at[label, "Verknüpfte_INV"])
         )
 
@@ -266,11 +243,9 @@ def on_table_edited() -> None:
 def build_excel_bytes(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        # 내보낼 때는 세무사용 깔끔한 데이터 피딩을 위해 백엔드 히든 컬럼 제거
-        df_clean = df.drop(columns=["_FileExt", "_RawBytes", "_OcrText", "Währung_Hidden"], errors="ignore")
+        df_clean = df.drop(columns=["_FileExt", "_RawBytes", "_OcrText"], errors="ignore")
         df_clean.to_excel(writer, sheet_name="DATEV_Export", index=True)
         
-        # Excel 서식 지정
         ws = writer.sheets["DATEV_Export"]
         HEADER_FILL  = PatternFill("solid", fgColor="1F4E78")
         HEADER_FONT  = Font(name="Arial", size=11, bold=True, color="FFFFFF")
@@ -283,7 +258,7 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
         for row in ws.iter_rows(min_row=2):
             for col_idx, cell in enumerate(row, start=1):
                 cell.border = border_style
-                if col_idx in (5, 6, 7, 8, 9):  
+                if col_idx in (4, 5, 6, 7, 8):  
                     cell.number_format = '#,##0.00'
 
         for col in ws.columns:
@@ -293,7 +268,7 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 메인 UI 대시보드
+# UI 메인 제어 그리드
 # ══════════════════════════════════════════════════════════════════════════════
 
 uploaded_files = st.file_uploader("📂 매입 영수증 및 매출 Invoice 파일들을 함께 올려주세요", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
@@ -315,7 +290,7 @@ if uploaded_files:
         total_files = len(uploaded_files)
         progress_bar = st.progress(0)
 
-        with st.spinner(f"🔮 통화 통합형 파싱 엔진 구동 중..."):
+        with st.spinner(f"🔮 영수증 컨텍스트 판독 엔진 가동 중..."):
             for idx, uploaded_file in enumerate(uploaded_files):
                 file_bytes = uploaded_file.read()
                 ext        = uploaded_file.name.rsplit(".", 1)[-1].lower()
@@ -323,16 +298,16 @@ if uploaded_files:
 
                 beleg_nr, date_str, vendor, total, currency, kategorie, mwst_type, raw_text = ask_gemini_vision(file_bytes, mime_type, selected_skr)
 
-                brutto_eur = round(total * usd_to_eur_rate, 2) if currency == "USD" else total
+                # 초기 로드 시 대략적인 가이드용으로 1:1 매핑 후, 미국 건은 사용자가 수동 패치 유도
+                brutto_eur = total  
                 mwst_19, mwst_7, netto = calculate_tax_details(brutto_eur, mwst_type)
 
                 rows.append({
                     "Rechnungsdatum":  date_str,
                     "Verkäufer":        vendor,
                     f"Kategorie ({selected_skr})": kategorie,
-                    "Brutto":          total,           # 🛠️ 수동 수정이 가능하도록 순수 숫자 데이터 유지
-                    "Währung_Hidden":  currency,        # 🛠️ 백엔드 연산용 프라이빗 통화 키 저장고
-                    "Brutto (EUR)":    brutto_eur,
+                    "Brutto (원본)":    f"{total:,.2f} $" if currency == "USD" else f"{total:,.2f} €", 
+                    "Brutto (EUR)":    brutto_eur,      # 💡 사장님이 송금 영수증을 보고 직접 고칠 메인 타겟
                     "MwSt 19% (EUR)":  mwst_19,
                     "MwSt 7% (EUR)":   mwst_7,
                     "Netto (EUR)":      netto,
@@ -340,7 +315,7 @@ if uploaded_files:
                     "MwSt_Type":        mwst_type,
                     "Beleg_Nr":        beleg_nr,
                     "Verknüpfte_INV":  "",
-                    "DATEV-Dateiname": build_datev_filename(date_str, vendor, total, currency, default_zahlart, beleg_nr, ""),
+                    "DATEV-Dateiname": build_datev_filename(date_str, vendor, brutto_eur, default_zahlart, beleg_nr, ""),
                     "_FileExt": ext,
                     "_RawBytes": file_bytes,
                     "_OcrText": raw_text
@@ -352,7 +327,7 @@ if uploaded_files:
         st.session_state.edited_receipts.index.name = "Nr."
 
     # ══════════════════════════════════════════════════════════════════════════════
-    # 컬럼 정렬 설계: Währung 컬럼을 완전히 삭제하고, 원본 금액 뒤에 동적 기호 접미사 처리
+    # 초슬림형 데이터 에디터 테이블 뷰 렌더링
     # ══════════════════════════════════════════════════════════════════════════════
     st.data_editor(
         st.session_state.edited_receipts,
@@ -363,20 +338,19 @@ if uploaded_files:
         on_change=on_table_edited,
         column_config={
             f"Kategorie ({selected_skr})": st.column_config.TextColumn(f"🧾 {selected_skr} 과목", width="medium"),
-            # 🎯 핵심 튜닝: 원본 통화(EUR/USD)종류를 감지하여 금액 에디터 우측에 접미사(Symbol) 자동 병합 표기!
-            "Brutto":          st.column_config.NumberColumn("Brutto (원본)", format="%,.2f"), 
-            "Brutto (EUR)":    st.column_config.NumberColumn("Brutto (EUR)", format="%,.2f €"),
+            "Brutto (원본)":    st.column_config.TextColumn("Brutto (AI 판독 원본)", disabled=True), # 수정 불가 가이드라인
+            "Brutto (EUR)":    st.column_config.NumberColumn("Brutto (실제 송금액 EUR)", format="%,.2f €", help="미국 달러 건은 은행 앱에 찍힌 실제 나간 유로화 금액을 여기 직접 기입하세요."),
             "MwSt 19% (EUR)":  st.column_config.NumberColumn("MwSt 19%", format="%,.2f €"),
             "MwSt 7% (EUR)":   st.column_config.NumberColumn("MwSt 7%", format="%,.2f €"),
             "Netto (EUR)":     st.column_config.NumberColumn("Netto (EUR)", format="%,.2f €"),
             "MwSt_Type":       st.column_config.SelectboxColumn("Tax Type", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
             "Verknüpfte_INV":  st.column_config.TextColumn("🔗 연관 매출INV (수출 짝매칭 번호)"),
             "DATEV-Dateiname": st.column_config.TextColumn("DATEV 확정 파일명", width="max"),
-            "Währung_Hidden":  None, "_FileExt": None, "_RawBytes": None, "_OcrText": None
+            "_FileExt":        None, "_RawBytes": None, "_OcrText": None
         },
     )
 
-    # 아웃풋 스트림 파트
+    # 아카이브 다운로드 레이어
     df_final = st.session_state.edited_receipts
     today = datetime.now().strftime("%Y%m%d")
 
