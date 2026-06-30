@@ -334,7 +334,7 @@ if uploaded_files:
                     "Währung_Hidden":  currency,        # 🛠️ 백엔드 연산용 프라이빗 통화 키 저장고
                     "Brutto (EUR)":    brutto_eur,
                     "MwSt 19% (EUR)":  mwst_19,
-                    "MwSt 7% (EUR)":   **mwst_7**,
+                    "MwSt 7% (EUR)":   mwst_7,
                     "Netto (EUR)":      netto,
                     "Zahlart":          default_zahlart,
                     "MwSt_Type":        mwst_type,
