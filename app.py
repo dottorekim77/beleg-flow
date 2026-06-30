@@ -15,7 +15,6 @@ PAGE_TITLE      = "DE Beleg-Parser Pro AI"
 PAGE_ICON       = "🧾"
 GEMINI_MODEL    = "gemini-3.1-flash-lite"   
 FREE_TIER_DELAY = 4.2                        
-# 독일 표준 부가세율
 MWST_19_FACTOR  = 19 / 119
 MWST_7_FACTOR   = 7 / 107
 
@@ -41,8 +40,8 @@ _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 # Streamlit 페이지 설정
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v2.5-SaaS Ready)")
-st.caption("독일 SKR03 세무 계정 자동 분류 및 19%/7% 다중 부가세 분리 엔진이 탑재된 고급 빌드.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v2.6-Dual SKR Engine)")
+st.caption("독일 표준 세무 계정 SKR03 및 SKR04 동적 전환 매핑 허브 및 다중 부가세 분리 시스템.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # API 키 로드
@@ -84,10 +83,33 @@ def build_datev_filename(
     return f"{date_compact}_{v_clean}_{brutto:.2f}{c_symbol}_{z_code}{b_suffix}{inv_suffix}.{ext}"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 고도화된 Gemini Vision 프롬프트 (SKR03 세무 범주 및 다중 부가세 추출)
+# SKR03 / SKR04 동적 프롬프트 매핑 가이드 레이어
 # ══════════════════════════════════════════════════════════════════════════════
 
-_GEMINI_PROMPT = """
+def get_gemini_prompt(skr_mode: str) -> str:
+    """사용자가 고른 SKR 모드에 따라 맞춤형 가이드라인 프롬프트를 동적으로 생성합니다."""
+    if skr_mode == "SKR03":
+        skr_guide = """
+   - 4930 (Bürobedarf / 사무용품)
+   - 4960 (Miete/Pacht / 임차료)
+   - 4650 (Bewirtungskosten / 접대비)
+   - 4660 (Reisekosten / 여비교통비)
+   - 4530 (Laufende Kfz-Betriebskosten / 차량유지비-주유 등)
+   - 4920 (Telefon/Internet / 통신비)
+   - 4400 (Gebühren / 수수료/서비스이용료)
+   - 4980 (Betriebsbedarf / 기타 소모품)"""
+    else:
+        skr_guide = """
+   - 6815 (Bürobedarf / 사무용품)
+   - 6310 (Miete/Pacht / 임차료)
+   - 6640 (Bewirtungskosten / 접대비)
+   - 6650 (Reisekosten / 여비교통비)
+   - 6520 (Laufende Kfz-Betriebskosten / 차량유지비-주유 등)
+   - 6805 (Telefon/Internet / 통신비)
+   - 6855 (Gebühren / 수수료/서비스이용료)
+   - 6300 (Sonstige betriebliche Aufwendungen / 기타 소모품)"""
+
+    return f"""
 너는 독일 세무 회계(Steuerwesen) 및 DATEV 시스템 전문가야.
 제공된 문서를 분석하여 아래 규칙에 맞게 정확한 정보를 추출해줘.
 
@@ -96,16 +118,8 @@ _GEMINI_PROMPT = """
 3. Verkäufer: 발행 회사명 (최대 12자 내외의 핵심 식별 단어)
 4. Bruttobetrag: 총 합계 금액 (숫자만, 소수점은 반드시 마침표 '.' 사용)
 5. Währung: EUR 또는 USD
-6. Kategorie_SKR03: 영수증의 성격을 분석하여 다음 독일 표준 SKR03 계정 과목 중 하나를 추천하고 코드와 이름을 적어줘.
-   - 4930 (Bürobedarf / 사무용품)
-   - 4960 (Miete/Pacht / 임차료)
-   - 4650 (Bewirtungskosten / 접대비)
-   - 4660 (Reisekosten / 여비교통비)
-   - 4530 (Laufende Kfz-Betriebskosten / 차량유지비-주유 등)
-   - 4920 (Telefon/Internet / 통신비)
-   - 4400 (Gebühren / 수수료/서비스이용료)
-   - 4980 (Betriebsbedarf / 기타 소모품)
-7. MwSt_Split: 영수증에 기재된 부가세 내역을 확인하여 19%와 7% 금액이 각각 명시되어 있다면 그 금액을 적어줘. 만약 명시되어 있지 않고 통으로 되어 있다면 총액(Brutto)에서 역산할 수 있도록 "AUTO_19" 혹은 "AUTO_7"로 판단해줘.
+6. Kategorie_SKR: 영수증의 성격을 분석하여 다음 독일 표준 {skr_mode} 계정 과목 중 하나를 추천하고 코드와 이름을 적어줘.{skr_guide}
+7. MwSt_Type: 영수증에 기재된 부가세 내역을 확인하여 19%와 7% 금액이 각각 명시되어 있다면 "Split"으로 표기하고, 그 외에는 "19_Only", "7_Only", "AUTO_19" 중 하나로 매핑해줘.
 
 [출력 포맷 — 아래 7줄 외 절대 다른 텍스트 금지, 빈 값은 None 표기]
 Beleg_Nr: [번호]
@@ -113,9 +127,13 @@ Datum: [YYYY-MM-DD]
 Vendor: [회사명]
 Total: [숫자.소수점2자리]
 Currency: [EUR 또는 USD]
-Kategorie: [예: 4530 - Kfz-Kosten]
+Kategorie: [예시 구조 코드 - 이름]
 MwSt_Type: [19_Only / 7_Only / Split / AUTO_19]
 """
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 파싱 엔진 및 핵심 백엔드 로직
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _parse_german_amount(raw: str) -> float:
     s = re.sub(r"[€$£\s]", "", raw)
@@ -130,20 +148,22 @@ def _parse_german_amount(raw: str) -> float:
     try: return float(s)
     except ValueError: return 0.0
 
-def ask_gemini_vision(file_bytes: bytes, mime_type: str) -> tuple:
-    fallback = ("", datetime.now().strftime("%Y-%m-%d"), "Unbekannt", 0.0, "EUR", "4980 - Betriebsbedarf", "AUTO_19")
+def ask_gemini_vision(file_bytes: bytes, mime_type: str, skr_mode: str) -> tuple:
+    default_cat = "4980 - Betriebsbedarf" if skr_mode == "SKR03" else "6300 - Sonstige Aufwendungen"
+    fallback = ("", datetime.now().strftime("%Y-%m-%d"), "Unbekannt", 0.0, "EUR", default_cat, "AUTO_19")
     if not API_KEY: return fallback
     try:
         model = genai.GenerativeModel(GEMINI_MODEL)
-        response = model.generate_content([{"mime_type": mime_type, "data": file_bytes}, _GEMINI_PROMPT])
-        return _parse_gemini_response(response.text)
+        prompt_text = get_gemini_prompt(skr_mode)
+        response = model.generate_content([{"mime_type": mime_type, "data": file_bytes}, prompt_text])
+        return _parse_gemini_response(response.text, default_cat)
     except Exception as exc:
         st.sidebar.error(f"❌ Gemini API 오류: {exc}")
         return fallback
 
-def _parse_gemini_response(text: str) -> tuple:
+def _parse_gemini_response(text: str, default_cat: str) -> tuple:
     beleg_nr, date_str, vendor, total, currency = "", datetime.now().strftime("%Y-%m-%d"), "Unbekannt", 0.0, "EUR"
-    kategorie, mwst_type = "4980 - Betriebsbedarf", "AUTO_19"
+    kategorie, mwst_type = default_cat, "AUTO_19"
     cleaned = re.sub(r"[*`]", "", text)
 
     for line in cleaned.splitlines():
@@ -167,20 +187,13 @@ def _parse_gemini_response(text: str) -> tuple:
 
     return beleg_nr, date_str, vendor, total, currency, kategorie, mwst_type
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 재계산 레이어 (다중 부가세 분리 반영)
-# ══════════════════════════════════════════════════════════════════════════════
-
 def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple[float, float, float]:
-    """MwSt_Type에 따라 19%와 7% 부가세 및 Netto 금액을 정밀 계산합니다."""
     mwst_19, mwst_7 = 0.0, 0.0
-    
     if mwst_type in ("19_Only", "AUTO_19"):
         mwst_19 = round(brutto_eur * MWST_19_FACTOR, 2)
     elif mwst_type == "7_Only":
         mwst_7 = round(brutto_eur * MWST_7_FACTOR, 2)
     elif mwst_type == "Split":
-        # 이미지에서 정확한 스플릿 비율을 못 잡은 경우 안전하게 50:50 세무 대안 분할 처리 가이드
         half = round(brutto_eur / 2, 2)
         mwst_19 = round(half * MWST_19_FACTOR, 2)
         mwst_7 = round((brutto_eur - half) * MWST_7_FACTOR, 2)
@@ -220,7 +233,7 @@ def on_table_edited() -> None:
     st.session_state.edited_receipts = df
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Excel 포맷 엔진 (신규 컬럼 대응)
+# Excel 스타일 서식화 엔진
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _apply_excel_styles(worksheet) -> None:
@@ -237,7 +250,7 @@ def _apply_excel_styles(worksheet) -> None:
         for col_idx, cell in enumerate(row, start=1):
             cell.border = border_style
             if col_idx in (1, 2, 3): cell.alignment = Alignment(horizontal="center")
-            elif col_idx in (5, 6, 7, 8, 9):  # 금액 컬럼 서식 지정
+            elif col_idx in (5, 6, 7, 8, 9):  
                 cell.alignment = Alignment(horizontal="right")
                 cell.number_format = '#,##0.00'
 
@@ -253,14 +266,21 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# UI 레이어
+# 대시보드 UI 레이어
 # ══════════════════════════════════════════════════════════════════════════════
 
 uploaded_files = st.file_uploader("Rechnungen auswählen (PDF oder Bild)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
-default_zahlart: str = st.radio("⚙️ 기본 결제수단", options=ZAHLART_OPTIONS, index=0, horizontal=True)
+
+col_cfg1, col_cfg2 = st.columns(2)
+with col_cfg1:
+    default_zahlart: str = st.radio("⚙️ 기본 결제수단", options=ZAHLART_OPTIONS, index=0, horizontal=True)
+with col_cfg2:
+    # 🎯 핵심 튜닝: 사용자가 원하는 표준 계정과목 풀 선택 가능하게 추가!
+    selected_skr: str = st.radio("📊 세무 계정 기준 (Standardkontenrahmen)", options=["SKR03", "SKR04"], index=0, horizontal=True)
 
 if uploaded_files:
-    batch_key = "".join(f.name for f in uploaded_files)
+    # 사용자가 배치를 바꾸거나 SKR 모드를 바꾸면 캐시 강제 리셋 후 재판독 유도
+    batch_key = "".join(f.name for f in uploaded_files) + f"_{selected_skr}"
     if st.session_state.get("last_batch_key") != batch_key:
         st.session_state.last_batch_key = batch_key
         st.session_state.edited_receipts = None
@@ -270,13 +290,14 @@ if uploaded_files:
         total_files = len(uploaded_files)
         progress_bar = st.progress(0)
 
-        with st.spinner("🔮 비전 AI가 독일 세무 범주(SKR03) 및 부가세 내역을 정밀 분석 중..."):
+        with st.spinner(f"🔮 비전 AI가 {selected_skr} 계정 과목 및 다중 부가세를 판독하는 중..."):
             for idx, uploaded_file in enumerate(uploaded_files):
                 file_bytes = uploaded_file.read()
                 ext        = uploaded_file.name.rsplit(".", 1)[-1].lower()
                 mime_type  = MIME_MAP.get(ext, "application/octet-stream")
 
-                beleg_nr, date_str, vendor, total, currency, kategorie, mwst_type = ask_gemini_vision(file_bytes, mime_type)
+                # 동적 지정된 SKR 모드로 AI 연동 실행
+                beleg_nr, date_str, vendor, total, currency, kategorie, mwst_type = ask_gemini_vision(file_bytes, mime_type, selected_skr)
 
                 brutto_eur = round(total * usd_to_eur_rate, 2) if currency == "USD" else total
                 mwst_19, mwst_7, netto = calculate_tax_details(brutto_eur, mwst_type)
@@ -284,7 +305,7 @@ if uploaded_files:
                 rows.append({
                     "Rechnungsdatum":  date_str,
                     "Verkäufer":        vendor,
-                    "Kategorie (SKR03)": kategorie,
+                    f"Kategorie ({selected_skr})": kategorie, # 헤더 이름도 동적으로 스위칭
                     "Währung":          currency,
                     "Brutto":          total,
                     "Brutto (EUR)":    brutto_eur,
@@ -304,11 +325,7 @@ if uploaded_files:
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
-    # 통계 배너
-    df_all = st.session_state.edited_receipts
-    st.markdown(f"### 📊 분석 요약: 총 {len(df_all)} 건의 전표가 정렬되었습니다.")
-
-    # 데이터 에디터 렌더링
+    # 데이터 에디터 출력
     st.data_editor(
         st.session_state.edited_receipts,
         use_container_width=True,
@@ -317,7 +334,7 @@ if uploaded_files:
         key="beleg_editor_key",
         on_change=on_table_edited,
         column_config={
-            "Kategorie (SKR03)": st.column_config.TextColumn("🧾 SKR03 계정과목", width="medium"),
+            f"Kategorie ({selected_skr})": st.column_config.TextColumn(f"🧾 {selected_skr} 계정과목", width="medium"),
             "Brutto":          st.column_config.NumberColumn("Brutto (원본)", format="%,.2f"),
             "Brutto (EUR)":    st.column_config.NumberColumn("Brutto (EUR)", format="%,.2f €"),
             "MwSt 19% (EUR)":  st.column_config.NumberColumn("MwSt 19%", format="%,.2f €"),
@@ -329,12 +346,12 @@ if uploaded_files:
         },
     )
 
-    # 다운로드 레이어
+    # 엑셀/CSV 다운로드 유틸리티
     export_df = st.session_state.edited_receipts.drop(columns=["_FileExt"])
     today = datetime.now().strftime("%Y%m%d")
     
     col_dl1, col_dl2 = st.columns(2)
     with col_dl1:
-        st.download_button(label="📥 DATEV 호환 Excel 다운로드 (.xlsx)", data=build_excel_bytes(export_df), file_name=f"DATEV_Export_{today}.xlsx", use_container_width=True)
+        st.download_button(label=f"📥 {selected_skr} 매핑형 Excel 다운로드 (.xlsx)", data=build_excel_bytes(export_df), file_name=f"DATEV_{selected_skr}_Export_{today}.xlsx", use_container_width=True)
     with col_dl2:
         st.download_button(label="📄 CSV 다운로드 (.csv)", data=export_df.to_csv(index=True, encoding="utf-8-sig"), file_name=f"DATEV_Export_{today}.csv", use_container_width=True)
