@@ -266,7 +266,7 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
                 cell.border = border_style
                 
                 # 금액 관련 컬럼 (5번째 열부터 8번째 열까지) 회계/통화 서식 강제 적용
-                if col_idx in (5, 6, 7, 8):
+                if col_idx in (5, 6, 7, 8, 9):
                     # 소수점 뒤에 0이 와도 강제로 두 자리(00)를 채우고 뒤에 유로 기호 부착
                     cell.number_format = '#,##0.00_ ;[Rot]-#,##0.00_ ;"-"??_ ;@_'
                     # 또는 단순한 유로 포맷을 원하시면 아래 주석을 해제하고 사용하셔도 됩니다:
