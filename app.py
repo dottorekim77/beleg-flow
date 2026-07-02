@@ -352,7 +352,7 @@ if uploaded_files:
             "MwSt 7% (EUR)":   st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
             "Netto (EUR)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
             # [수정] image_60f5c0.png의 스위치 스타일 렌더링을 위해 CheckboxColumn 적용 (선택 시 🔴 Kreditkarte / 미선택 시 ⚪ Firmenkonto)
-            "Is_Kreditkarte":  None,
+            "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳", help="Schalter: Aktiviert = Kreditkarte, Deaktiviert = Firmenkonto"),
             "Zahlart":         st.column_config.TextColumn("Zahlart (DATEV)", disabled=True, width="small"),
             "MwSt_Type":       st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
             "Verknüpfte_INV":  st.column_config.TextColumn("🔗 Verknüpfte Ausgangs-INV (Export-Matching)"),
