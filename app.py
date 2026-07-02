@@ -41,10 +41,9 @@ st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v3.1 - DATEV-Native)")
 st.caption("Automatisierte Belegerfassung mit Sandwich-PDF-Generierung und SKR-Klassifizierung für den Steuerberater.")
 
-# ⚙️ image_60f5c0.png 스타일의 좌우 이동 스위치를 위한 커스텀 CSS 주입 (제목 제거 버전)
-st.markdown("""
+# ⚙️ 에러 안전성이 확보된 st.html() 방식을 사용하여 image_60f5c0.png 스타일 좌우 슬라이더 CSS 주입
+st.html("""
 <style>
-/* 토글 스위치 틀 (제목을 지웠으므로 스위치 본체만 중앙 정렬 배치) */
 .switch-container {
     display: inline-flex;
     align-items: center;
@@ -63,17 +62,15 @@ st.markdown("""
     width: 0;
     height: 0;
 }
-/* 좌우로 움직이는 슬라이더 셔터 (image_60f5c0.png 외곽선 재현) */
 .slider {
     position: absolute;
     cursor: pointer;
     top: 0; left: 0; right: 0; bottom: 0;
     background-color: #E0E0E0;
-    transition: .3s;
+    transition: 0.3s;
     border-radius: 26px;
     border: 2px solid #333333;
 }
-/* 스위치 내부의 원 */
 .slider:before {
     position: absolute;
     content: "";
@@ -82,11 +79,10 @@ st.markdown("""
     left: 2px;
     bottom: 2px;
     background-color: white;
-    transition: .3s;
+    transition: 0.3s;
     border-radius: 50%;
     border: 2px solid #333333;
 }
-/* 켜졌을 때 (오른쪽 이동 및 파란색 활성화) */
 input:checked + .slider {
     background-color: #2196F3;
 }
@@ -94,7 +90,7 @@ input:checked + .slider:before {
     transform: translateX(24px);
 }
 </style>
-""", unsafe_with_html=True)
+""")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # API AUTHENTIFIZIERUNG
@@ -380,20 +376,17 @@ if uploaded_files:
         st.session_state.edited_receipts.index.name = "Nr."
 
     # ══════════════════════════════════════════════════════════════════════════════
-    # 🔘 INTERAKTIVER SCHALTER BEREICH (image_60f5c0.png 스타일 슬라이더 컨트롤러)
+    # 🔘 INTERAKTIVER SCHALTER BEREICH (image_60f5c0.png 스타일 적용)
     # ══════════════════════════════════════════════════════════════════════════════
     st.markdown("### 🔄 Zahlart Schalter (Left: Firmenkonto / Right: Kreditkarte)")
     
-    # 영수증 항목별로 좌우 슬라이드 스위치를 한 줄씩 렌더링 (제목 완전히 제거)
     df = st.session_state.edited_receipts
-    
-    # 레이아웃 분할을 위해 영수증 개수에 따라 컬럼 동적 배치
     toggle_cols = st.columns(len(df))
     for idx, (row_idx, row) in enumerate(df.iterrows()):
         with toggle_cols[idx]:
             is_checked = "checked" if row["Zahlart"] == "Kreditkarte" else ""
             
-            # 제목(Label) 텍스트를 완전히 없애고 image_60f5c0.png 모양의 기하학적 토글만 단독 출력
+            # 레이블/제목 없이 image_60f5c0.png와 똑같이 좌우 슬라이드 스위치 자체만 단독 출력
             switch_html = f"""
             <div class="switch-container">
                 <small style='margin-right:8px; font-weight:bold; color:#666;'>Nr.{row_idx}</small>
@@ -403,14 +396,13 @@ if uploaded_files:
                 </label>
             </div>
             """
-            st.markdown(switch_html, unsafe_with_html=True)
+            st.html(switch_html)
             
-            # 스위치 역할을 수행할 미니 동적 버튼 매핑 (Streamlit과 데이터 동기화)
+            # 스위치 제어용 동적 인라인 전환 매퍼 버튼
             btn_label = "👉 🟢 Kreditkarte" if row["Zahlart"] == "Firmenkonto" else "👈 ⚪ Firmenkonto"
             if st.button(btn_label, key=f"btn_toggle_{row_idx}", use_container_width=True):
                 new_zahlart = "Kreditkarte" if row["Zahlart"] == "Firmenkonto" else "Firmenkonto"
                 
-                # 세션 데이터 즉시 업데이트 및 파일명 빌드 가동
                 st.session_state.edited_receipts.at[row_idx, "Zahlart"] = new_zahlart
                 brutto = float(df.at[row_idx, "Gebuchter Bruttobetrag (EUR)"])
                 st.session_state.edited_receipts.at[row_idx, "DATEV-Dateiname"] = build_datev_filename(
@@ -419,7 +411,7 @@ if uploaded_files:
                 )
                 st.rerun()
 
-    st.write("") # 간격 조정
+    st.write("") 
 
     # ══════════════════════════════════════════════════════════════════════════════
     # INTERAKTIVE DATEV-ERFASSUNGSMASKE (DATA EDITOR)
