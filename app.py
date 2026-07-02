@@ -41,6 +41,61 @@ st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v3.1 - DATEV-Native)")
 st.caption("Automatisierte Belegerfassung mit Sandwich-PDF-Generierung und SKR-Klassifizierung für den Steuerberater.")
 
+# ⚙️ image_60f5c0.png 스타일의 좌우 이동 스위치를 위한 커스텀 CSS 주입 (제목 제거 버전)
+st.markdown("""
+<style>
+/* 토글 스위치 틀 (제목을 지웠으므로 스위치 본체만 중앙 정렬 배치) */
+.switch-container {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+}
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 26px;
+    margin: 0;
+}
+.switch input { 
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+/* 좌우로 움직이는 슬라이더 셔터 (image_60f5c0.png 외곽선 재현) */
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: #E0E0E0;
+    transition: .3s;
+    border-radius: 26px;
+    border: 2px solid #333333;
+}
+/* 스위치 내부의 원 */
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 2px;
+    bottom: 2px;
+    background-color: white;
+    transition: .3s;
+    border-radius: 50%;
+    border: 2px solid #333333;
+}
+/* 켜졌을 때 (오른쪽 이동 및 파란색 활성화) */
+input:checked + .slider {
+    background-color: #2196F3;
+}
+input:checked + .slider:before {
+    transform: translateX(24px);
+}
+</style>
+""", unsafe_with_html=True)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # API AUTHENTIFIZIERUNG
 # ══════════════════════════════════════════════════════════════════════════════
@@ -209,7 +264,7 @@ def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple[float, flo
     return mwst_19, mwst_7, netto
 
 # ══════════════════════════════════════════════════════════════════════════════
-# REKALKULATION BEI MANUELLER ÄNDERUNG (Z.B. BANKKONTO-ABGLEICH FÜR USD-BELEGE)
+# REKALKULATION BEI MANUELLER ÄNDERUNG
 # ══════════════════════════════════════════════════════════════════════════════
 
 def on_table_edited() -> None:
@@ -223,11 +278,6 @@ def on_table_edited() -> None:
         label = df.index[int(row_idx_str)]
         for col, new_val in changes.items():
             df.at[label, col] = new_val
-
-        # [수정] 토글 스위치(Is_Kreditkarte) 컬럼이 수정되었을 때, 실제 Zahlart 텍스트 매핑
-        if "Is_Kreditkarte" in changes:
-            is_cc = changes["Is_Kreditkarte"]
-            df.at[label, "Zahlart"] = "Kreditkarte" if is_cc else "Firmenkonto"
 
         brutto_eur = float(df.at[label, "Gebuchter Bruttobetrag (EUR)"])
         m_type     = str(df.at[label, "MwSt_Type"])
@@ -247,8 +297,7 @@ def on_table_edited() -> None:
 def build_excel_bytes(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        # 내보내기 시 토글용 임시 컬럼(Is_Kreditkarte)을 드롭하여 엑셀 가독성 유지
-        df_clean = df.drop(columns=["_FileExt", "_RawBytes", "_OcrText", "Is_Kreditkarte"], errors="ignore")
+        df_clean = df.drop(columns=["_FileExt", "_RawBytes", "_OcrText"], errors="ignore")
         df_clean.to_excel(writer, sheet_name="DATEV_Export", index=True)
         
         ws = writer.sheets["DATEV_Export"]
@@ -306,9 +355,6 @@ if uploaded_files:
                 brutto_eur = total  
                 mwst_19, mwst_7, netto = calculate_tax_details(brutto_eur, mwst_type)
 
-                # [수정] 토글 매핑용 boolean 값 추가 (Kreditkarte면 True, Firmenkonto면 False)
-                is_cc_initial = (default_zahlart == "Kreditkarte")
-
                 rows.append({
                     "Rechnungsdatum":  date_str,
                     "Verkäufer":        vendor,
@@ -318,7 +364,6 @@ if uploaded_files:
                     "MwSt 19% (EUR)":  mwst_19,
                     "MwSt 7% (EUR)":   mwst_7,
                     "Netto (EUR)":      netto,
-                    "Is_Kreditkarte":   is_cc_initial, # [추정] image_60f5c0.png 대응용 토글 매핑 플래그
                     "Zahlart":          default_zahlart,
                     "MwSt_Type":        mwst_type,
                     "Beleg_Nr":        beleg_nr,
@@ -335,13 +380,55 @@ if uploaded_files:
         st.session_state.edited_receipts.index.name = "Nr."
 
     # ══════════════════════════════════════════════════════════════════════════════
+    # 🔘 INTERAKTIVER SCHALTER BEREICH (image_60f5c0.png 스타일 슬라이더 컨트롤러)
+    # ══════════════════════════════════════════════════════════════════════════════
+    st.markdown("### 🔄 Zahlart Schalter (Left: Firmenkonto / Right: Kreditkarte)")
+    
+    # 영수증 항목별로 좌우 슬라이드 스위치를 한 줄씩 렌더링 (제목 완전히 제거)
+    df = st.session_state.edited_receipts
+    
+    # 레이아웃 분할을 위해 영수증 개수에 따라 컬럼 동적 배치
+    toggle_cols = st.columns(len(df))
+    for idx, (row_idx, row) in enumerate(df.iterrows()):
+        with toggle_cols[idx]:
+            is_checked = "checked" if row["Zahlart"] == "Kreditkarte" else ""
+            
+            # 제목(Label) 텍스트를 완전히 없애고 image_60f5c0.png 모양의 기하학적 토글만 단독 출력
+            switch_html = f"""
+            <div class="switch-container">
+                <small style='margin-right:8px; font-weight:bold; color:#666;'>Nr.{row_idx}</small>
+                <label class="switch">
+                    <input type="checkbox" id="toggle_{row_idx}" {is_checked} disabled>
+                    <span class="slider"></span>
+                </label>
+            </div>
+            """
+            st.markdown(switch_html, unsafe_with_html=True)
+            
+            # 스위치 역할을 수행할 미니 동적 버튼 매핑 (Streamlit과 데이터 동기화)
+            btn_label = "👉 🟢 Kreditkarte" if row["Zahlart"] == "Firmenkonto" else "👈 ⚪ Firmenkonto"
+            if st.button(btn_label, key=f"btn_toggle_{row_idx}", use_container_width=True):
+                new_zahlart = "Kreditkarte" if row["Zahlart"] == "Firmenkonto" else "Firmenkonto"
+                
+                # 세션 데이터 즉시 업데이트 및 파일명 빌드 가동
+                st.session_state.edited_receipts.at[row_idx, "Zahlart"] = new_zahlart
+                brutto = float(df.at[row_idx, "Gebuchter Bruttobetrag (EUR)"])
+                st.session_state.edited_receipts.at[row_idx, "DATEV-Dateiname"] = build_datev_filename(
+                    str(df.at[row_idx, "Rechnungsdatum"]), str(df.at[row_idx, "Verkäufer"]), brutto,
+                    new_zahlart, str(df.at[row_idx, "Beleg_Nr"]), str(df.at[row_idx, "Verknüpfte_INV"])
+                )
+                st.rerun()
+
+    st.write("") # 간격 조정
+
+    # ══════════════════════════════════════════════════════════════════════════════
     # INTERAKTIVE DATEV-ERFASSUNGSMASKE (DATA EDITOR)
     # ══════════════════════════════════════════════════════════════════════════════
     st.data_editor(
         st.session_state.edited_receipts,
         use_container_width=True,
         num_rows="fixed",
-        height=450,
+        height=400,
         key="beleg_editor_key",
         on_change=on_table_edited,
         column_config={
@@ -351,8 +438,6 @@ if uploaded_files:
             "MwSt 19% (EUR)":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
             "MwSt 7% (EUR)":   st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
             "Netto (EUR)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
-            # [수정] image_60f5c0.png의 스위치 스타일 렌더링을 위해 CheckboxColumn 적용 (선택 시 🔴 Kreditkarte / 미선택 시 ⚪ Firmenkonto)
-            "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳 Kreditkarte (Toggle)", help="Schalter: Aktiviert = Kreditkarte, Deaktiviert = Firmenkonto"),
             "Zahlart":         st.column_config.TextColumn("Zahlart (DATEV)", disabled=True, width="small"),
             "MwSt_Type":       st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
             "Verknüpfte_INV":  st.column_config.TextColumn("🔗 Verknüpfte Ausgangs-INV (Export-Matching)"),
