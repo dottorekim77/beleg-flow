@@ -28,8 +28,9 @@ MIME_MAP = {
     "png":  "image/png",
 }
 
-ZAHLART_OPTIONS = ["Firmenkonto", "Mastercard"]
-Z_CODE_MAP      = {"Firmenkonto": "BANK", "Mastercard": "CC"}
+# 기존 Mastercard를 사용자 요청에 맞춰 Kreditkarte로 변경
+ZAHLART_OPTIONS = ["Firmenkonto", "Kreditkarte"]
+Z_CODE_MAP      = {"Firmenkonto": "BANK", "Kreditkarte": "CC"}
 
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 
@@ -223,6 +224,11 @@ def on_table_edited() -> None:
         for col, new_val in changes.items():
             df.at[label, col] = new_val
 
+        # [수정] 토글 스위치(Is_Kreditkarte) 컬럼이 수정되었을 때, 실제 Zahlart 텍스트 매핑
+        if "Is_Kreditkarte" in changes:
+            is_cc = changes["Is_Kreditkarte"]
+            df.at[label, "Zahlart"] = "Kreditkarte" if is_cc else "Firmenkonto"
+
         brutto_eur = float(df.at[label, "Gebuchter Bruttobetrag (EUR)"])
         m_type     = str(df.at[label, "MwSt_Type"])
 
@@ -241,7 +247,8 @@ def on_table_edited() -> None:
 def build_excel_bytes(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df_clean = df.drop(columns=["_FileExt", "_RawBytes", "_OcrText"], errors="ignore")
+        # 내보내기 시 토글용 임시 컬럼(Is_Kreditkarte)을 드롭하여 엑셀 가독성 유지
+        df_clean = df.drop(columns=["_FileExt", "_RawBytes", "_OcrText", "Is_Kreditkarte"], errors="ignore")
         df_clean.to_excel(writer, sheet_name="DATEV_Export", index=True)
         
         ws = writer.sheets["DATEV_Export"]
@@ -299,6 +306,9 @@ if uploaded_files:
                 brutto_eur = total  
                 mwst_19, mwst_7, netto = calculate_tax_details(brutto_eur, mwst_type)
 
+                # [수정] 토글 매핑용 boolean 값 추가 (Kreditkarte면 True, Firmenkonto면 False)
+                is_cc_initial = (default_zahlart == "Kreditkarte")
+
                 rows.append({
                     "Rechnungsdatum":  date_str,
                     "Verkäufer":        vendor,
@@ -308,6 +318,7 @@ if uploaded_files:
                     "MwSt 19% (EUR)":  mwst_19,
                     "MwSt 7% (EUR)":   mwst_7,
                     "Netto (EUR)":      netto,
+                    "Is_Kreditkarte":   is_cc_initial, # [추정] image_60f5c0.png 대응용 토글 매핑 플래그
                     "Zahlart":          default_zahlart,
                     "MwSt_Type":        mwst_type,
                     "Beleg_Nr":        beleg_nr,
@@ -340,6 +351,9 @@ if uploaded_files:
             "MwSt 19% (EUR)":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
             "MwSt 7% (EUR)":   st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
             "Netto (EUR)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
+            # [수정] image_60f5c0.png의 스위치 스타일 렌더링을 위해 CheckboxColumn 적용 (선택 시 🔴 Kreditkarte / 미선택 시 ⚪ Firmenkonto)
+            "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳 Kreditkarte (Toggle)", help="Schalter: Aktiviert = Kreditkarte, Deaktiviert = Firmenkonto"),
+            "Zahlart":         st.column_config.TextColumn("Zahlart (DATEV)", disabled=True, width="small"),
             "MwSt_Type":       st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
             "Verknüpfte_INV":  st.column_config.TextColumn("🔗 Verknüpfte Ausgangs-INV (Export-Matching)"),
             "DATEV-Dateiname": st.column_config.TextColumn("Zukünftiger DATEV-Dateiname", width="max"),
