@@ -28,7 +28,6 @@ MIME_MAP = {
     "png":  "image/png",
 }
 
-# 기존 Mastercard를 사용자 요청에 맞춰 Kreditkarte로 변경
 ZAHLART_OPTIONS = ["Firmenkonto", "Kreditkarte"]
 Z_CODE_MAP      = {"Firmenkonto": "BANK", "Kreditkarte": "CC"}
 
@@ -209,7 +208,7 @@ def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple[float, flo
     return mwst_19, mwst_7, netto
 
 # ══════════════════════════════════════════════════════════════════════════════
-# REKALKULATION BEI MANUELLER ÄNDERUNG (Z.B. BANKKONTO-ABGLEICH FÜR USD-BELEGE)
+# REKALKULATION BEI MANUELLER ÄNDERUNG
 # ══════════════════════════════════════════════════════════════════════════════
 
 def on_table_edited() -> None:
@@ -224,22 +223,21 @@ def on_table_edited() -> None:
         for col, new_val in changes.items():
             df.at[label, col] = new_val
 
-        # [수정] 토글 스위치(Is_Kreditkarte) 컬럼이 수정되었을 때, 실제 Zahlart 텍스트 매핑
         if "Is_Kreditkarte" in changes:
             is_cc = changes["Is_Kreditkarte"]
-            df.at[label, "Zahlart"] = "Kreditkarte" if is_cc else "Firmenkonto"
+            df.at[label, "Zahlart (DATEV)"] = "Kreditkarte" if is_cc else "Firmenkonto"
 
-        brutto_eur = float(df.at[label, "Gebuchter Bruttobetrag (EUR)"])
-        m_type     = str(df.at[label, "MwSt_Type"])
+        brutto_eur = float(df.at[label, "Bruttobetrag (EUR)"])
+        m_type     = str(df.at[label, "Steuerschlüssel"])
 
         mwst_19, mwst_7, netto = calculate_tax_details(brutto_eur, m_type)
-        df.at[label, "MwSt 19% (EUR)"] = mwst_19
-        df.at[label, "MwSt 7% (EUR)"]  = mwst_7
-        df.at[label, "Netto (EUR)"]    = netto
+        df.at[label, "USt/Vorsteuer 19%"] = mwst_19
+        df.at[label, "Vorsteuer 7%"]  = mwst_7
+        df.at[label, "Nettobetrag (Haben)"]    = netto
 
-        df.at[label, "DATEV-Dateiname"] = build_datev_filename(
+        df.at[label, "Zukünftiger DATEV-Dateiname"] = build_datev_filename(
             str(df.at[label, "Rechnungsdatum"]), str(df.at[label, "Verkäufer"]), brutto_eur,
-            str(df.at[label, "Zahlart"]), str(df.at[label, "Beleg_Nr"]), str(df.at[label, "Verknüpfte_INV"])
+            str(df.at[label, "Zahlart (DATEV)"]), str(df.at[label, "Beleg_Nr"]), str(df.at[label, "🔗 Verknüpfte Ausgangs-INV"])
         )
 
     st.session_state.edited_receipts = df
@@ -247,7 +245,7 @@ def on_table_edited() -> None:
 def build_excel_bytes(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        # 내보내기 시 토글용 임시 컬럼(Is_Kreditkarte)을 드롭하여 엑셀 가독성 유지
+        # 내보내기 시 메타데이터 및 토글 체크박스 열 제거
         df_clean = df.drop(columns=["_FileExt", "_RawBytes", "_OcrText", "Is_Kreditkarte"], errors="ignore")
         df_clean.to_excel(writer, sheet_name="DATEV_Export", index=True)
         
@@ -263,12 +261,22 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
         for row in ws.iter_rows(min_row=2):
             for col_idx, cell in enumerate(row, start=1):
                 cell.border = border_style
+                # 수치 데이터 컬럼 서식 지정 (Beleg-Soll, Bruttobetrag, 19%, 7%, Netto)
                 if col_idx in (4, 5, 6, 7, 8):  
                     cell.number_format = '#,##0.00'
 
+        # 🗂️ 엑셀 셀 너비 자동 맞춤 기능 개선 (글자 길이에 따라 여유있게 자동 조절)
         for col in ws.columns:
-            max_len = max((len(str(c.value)) for c in col if c.value is not None), default=0)
-            ws.column_dimensions[col[0].column_letter].width = max(max_len + 3, 13)
+            max_len = 0
+            for cell in col:
+                if cell.value is not None:
+                    # 한글/특수문자가 포함된 경우 바이트 길이를 감안해 길이 보정
+                    val_str = str(cell.value)
+                    str_len = sum(2 if ord(char) > 128 else 1 for char in val_str)
+                    if str_len > max_len:
+                        max_len = str_len
+            col_letter = col[0].column_letter
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 14)
             
     return buf.getvalue()
 
@@ -306,24 +314,24 @@ if uploaded_files:
                 brutto_eur = total  
                 mwst_19, mwst_7, netto = calculate_tax_details(brutto_eur, mwst_type)
 
-                # [수정] 토글 매핑용 boolean 값 추가 (Kreditkarte면 True, Firmenkonto면 False)
                 is_cc_initial = (default_zahlart == "Kreditkarte")
 
+                # 📌 [수정] 결과 창 테이블 헤더 명칭과 엑셀 구조를 완전히 일치화 (image_88121a.png 기준 매핑)
                 rows.append({
                     "Rechnungsdatum":  date_str,
                     "Verkäufer":        vendor,
-                    f"Buchungskonto ({selected_skr})": kategorie,
-                    "Beleg-Betrag (Original)": f"{total:,.2f} $" if currency == "USD" else f"{total:,.2f} €", 
-                    "Gebuchter Bruttobetrag (EUR)": brutto_eur,      
-                    "MwSt 19% (EUR)":  mwst_19,
-                    "MwSt 7% (EUR)":   mwst_7,
-                    "Netto (EUR)":      netto,
-                    "Is_Kreditkarte":   is_cc_initial, # [추정] image_60f5c0.png 대응용 토글 매핑 플래그
-                    "Zahlart":          default_zahlart,
-                    "MwSt_Type":        mwst_type,
+                    f"{selected_skr}": kategorie, # 💡 'Gegenkonto (SKR04)' 대신 단순히 'SKR03' 또는 'SKR04'로만 표시
+                    "Beleg-Soll (Original)": f"{total:,.2f} $" if currency == "USD" else f"{total:,.2f} €", 
+                    "Bruttobetrag (EUR)": brutto_eur,      
+                    "USt/Vorsteuer 19%":  mwst_19,
+                    "Vorsteuer 7%":   mwst_7,
+                    "Nettobetrag (Haben)":      netto,
+                    "Is_Kreditkarte":   is_cc_initial, 
+                    "Zahlart (DATEV)":          default_zahlart,
+                    "Steuerschlüssel":        mwst_type,
                     "Beleg_Nr":        beleg_nr,
-                    "Verknüpfte_INV":  "",
-                    "DATEV-Dateiname": build_datev_filename(date_str, vendor, brutto_eur, default_zahlart, beleg_nr, ""),
+                    "🔗 Verknüpfte Ausgangs-INV":  "",
+                    "Zukünftiger DATEV-Dateiname": build_datev_filename(date_str, vendor, brutto_eur, default_zahlart, beleg_nr, ""),
                     "_FileExt": ext,
                     "_RawBytes": file_bytes,
                     "_OcrText": raw_text
@@ -337,6 +345,7 @@ if uploaded_files:
     # ══════════════════════════════════════════════════════════════════════════════
     # INTERAKTIVE DATEV-ERFASSUNGSMASKE (DATA EDITOR)
     # ══════════════════════════════════════════════════════════════════════════════
+    # 💡 데이터프레임 원본 열 이름을 캡처 화면 명칭과 동일하게 선언했으므로 column_config 맵핑도 자동 처리됩니다.
     st.data_editor(
         st.session_state.edited_receipts,
         use_container_width=True,
@@ -345,18 +354,17 @@ if uploaded_files:
         key="beleg_editor_key",
         on_change=on_table_edited,
         column_config={
-            f"Buchungskonto ({selected_skr})": st.column_config.TextColumn(f"🧾 Gegenkonto ({selected_skr})", width="medium"),
-            "Beleg-Betrag (Original)":    st.column_config.TextColumn("Beleg-Soll (Original)", disabled=True), 
-            "Gebuchter Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €", help="Bei USD-Belegen tragen Sie hier bitte den tatsächlichen Belastungsbetrag laut Bankkontoauszug ein."),
-            "MwSt 19% (EUR)":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
-            "MwSt 7% (EUR)":   st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
-            "Netto (EUR)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
-            # [수정] image_60f5c0.png의 스위치 스타일 렌더링을 위해 CheckboxColumn 적용 (선택 시 🔴 Kreditkarte / 미선택 시 ⚪ Firmenkonto)
-            "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳", help="Schalter: Aktiviert = Kreditkarte, Deaktiviert = Firmenkonto"),
-            "Zahlart":         st.column_config.TextColumn("Zahlart (DATEV)", disabled=True, width="small"),
-            "MwSt_Type":       st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
-            "Verknüpfte_INV":  st.column_config.TextColumn("🔗 Verknüpfte Ausgangs-INV (Export-Matching)"),
-            "DATEV-Dateiname": st.column_config.TextColumn("Zukünftiger DATEV-Dateiname", width="max"),
+            f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium"),
+            "Beleg-Soll (Original)":    st.column_config.TextColumn("Beleg-Soll (Original)", disabled=True), 
+            "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €"),
+            "USt/Vorsteuer 19%":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
+            "Vorsteuer 7%":   st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
+            "Nettobetrag (Haben)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
+            "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳", help="Aktiviert = Kreditkarte, Deaktiviert = Firmenkonto"),
+            "Zahlart (DATEV)":         st.column_config.TextColumn("Zahlart (DATEV)", disabled=True, width="small"),
+            "Steuerschlüssel":       st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
+            "🔗 Verknüpfte Ausgangs-INV":  st.column_config.TextColumn("🔗 Verknüpfte Ausgangs-INV"),
+            "Zukünftiger DATEV-Dateiname": st.column_config.TextColumn("Zukünftiger DATEV-Dateiname", width="max"),
             "_FileExt":        None, "_RawBytes": None, "_OcrText": None
         },
     )
@@ -375,7 +383,7 @@ if uploaded_files:
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             for _, row in df_final.iterrows():
-                target_filename = row["DATEV-Dateiname"]
+                target_filename = row["Zukünftiger DATEV-Dateiname"]
                 orig_bytes = row["_RawBytes"]
                 orig_ext = row["_FileExt"]
                 ocr_log = row["_OcrText"]
