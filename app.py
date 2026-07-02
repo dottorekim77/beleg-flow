@@ -28,9 +28,8 @@ MIME_MAP = {
     "png":  "image/png",
 }
 
-# 기존 Mastercard를 사용자 요청에 맞춰 Kreditkarte로 변경
-ZAHLART_OPTIONS = ["Firmenkonto", "Kreditkarte"]
-Z_CODE_MAP      = {"Firmenkonto": "BANK", "Kreditkarte": "CC"}
+ZAHLART_OPTIONS = ["Schalter Firmenkonto", "Schalter Kreditkarte"]
+Z_CODE_MAP      = {"Schalter Firmenkonto": "BANK", "Schalter Kreditkarte": "CC"}
 
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 
@@ -40,57 +39,6 @@ _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v3.1 - DATEV-Native)")
 st.caption("Automatisierte Belegerfassung mit Sandwich-PDF-Generierung und SKR-Klassifizierung für den Steuerberater.")
-
-# ⚙️ 에러 안전성이 확보된 st.html() 방식을 사용하여 image_60f5c0.png 스타일 좌우 슬라이더 CSS 주입
-st.html("""
-<style>
-.switch-container {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2px;
-}
-.switch {
-    position: relative;
-    display: inline-block;
-    width: 50px;
-    height: 26px;
-    margin: 0;
-}
-.switch input { 
-    opacity: 0;
-    width: 0;
-    height: 0;
-}
-.slider {
-    position: absolute;
-    cursor: pointer;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background-color: #E0E0E0;
-    transition: 0.3s;
-    border-radius: 26px;
-    border: 2px solid #333333;
-}
-.slider:before {
-    position: absolute;
-    content: "";
-    height: 18px;
-    width: 18px;
-    left: 2px;
-    bottom: 2px;
-    background-color: white;
-    transition: 0.3s;
-    border-radius: 50%;
-    border: 2px solid #333333;
-}
-input:checked + .slider {
-    background-color: #2196F3;
-}
-input:checked + .slider:before {
-    transform: translateX(24px);
-}
-</style>
-""")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # API AUTHENTIFIZIERUNG
@@ -260,7 +208,7 @@ def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple[float, flo
     return mwst_19, mwst_7, netto
 
 # ══════════════════════════════════════════════════════════════════════════════
-# REKALKULATION BEI MANUELLER ÄNDERUNG
+# REKALKULATION BEI MANUELLER ÄNDERUNG (Z.B. BANKKONTO-ABGLEICH FÜR USD-BELEGE)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def on_table_edited() -> None:
@@ -376,51 +324,13 @@ if uploaded_files:
         st.session_state.edited_receipts.index.name = "Nr."
 
     # ══════════════════════════════════════════════════════════════════════════════
-    # 🔘 INTERAKTIVER SCHALTER BEREICH (image_60f5c0.png 스타일 적용)
-    # ══════════════════════════════════════════════════════════════════════════════
-    st.markdown("### 🔄 Zahlart Schalter (Left: Firmenkonto / Right: Kreditkarte)")
-    
-    df = st.session_state.edited_receipts
-    toggle_cols = st.columns(len(df))
-    for idx, (row_idx, row) in enumerate(df.iterrows()):
-        with toggle_cols[idx]:
-            is_checked = "checked" if row["Zahlart"] == "Kreditkarte" else ""
-            
-            # 레이블/제목 없이 image_60f5c0.png와 똑같이 좌우 슬라이드 스위치 자체만 단독 출력
-            switch_html = f"""
-            <div class="switch-container">
-                <small style='margin-right:8px; font-weight:bold; color:#666;'>Nr.{row_idx}</small>
-                <label class="switch">
-                    <input type="checkbox" id="toggle_{row_idx}" {is_checked} disabled>
-                    <span class="slider"></span>
-                </label>
-            </div>
-            """
-            st.html(switch_html)
-            
-            # 스위치 제어용 동적 인라인 전환 매퍼 버튼
-            btn_label = "👉 🟢 Kreditkarte" if row["Zahlart"] == "Firmenkonto" else "👈 ⚪ Firmenkonto"
-            if st.button(btn_label, key=f"btn_toggle_{row_idx}", use_container_width=True):
-                new_zahlart = "Kreditkarte" if row["Zahlart"] == "Firmenkonto" else "Firmenkonto"
-                
-                st.session_state.edited_receipts.at[row_idx, "Zahlart"] = new_zahlart
-                brutto = float(df.at[row_idx, "Gebuchter Bruttobetrag (EUR)"])
-                st.session_state.edited_receipts.at[row_idx, "DATEV-Dateiname"] = build_datev_filename(
-                    str(df.at[row_idx, "Rechnungsdatum"]), str(df.at[row_idx, "Verkäufer"]), brutto,
-                    new_zahlart, str(df.at[row_idx, "Beleg_Nr"]), str(df.at[row_idx, "Verknüpfte_INV"])
-                )
-                st.rerun()
-
-    st.write("") 
-
-    # ══════════════════════════════════════════════════════════════════════════════
     # INTERAKTIVE DATEV-ERFASSUNGSMASKE (DATA EDITOR)
     # ══════════════════════════════════════════════════════════════════════════════
     st.data_editor(
         st.session_state.edited_receipts,
         use_container_width=True,
         num_rows="fixed",
-        height=400,
+        height=450,
         key="beleg_editor_key",
         on_change=on_table_edited,
         column_config={
@@ -430,8 +340,8 @@ if uploaded_files:
             "MwSt 19% (EUR)":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
             "MwSt 7% (EUR)":   st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
             "Netto (EUR)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
-            "Zahlart":         st.column_config.TextColumn("Zahlart (DATEV)", disabled=True, width="small"),
             "MwSt_Type":       st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
+            "Zahlart":         st.column_config.SelectboxColumn("Zahlart", options=ZAHLART_OPTIONS, width="medium"),
             "Verknüpfte_INV":  st.column_config.TextColumn("🔗 Verknüpfte Ausgangs-INV (Export-Matching)"),
             "DATEV-Dateiname": st.column_config.TextColumn("Zukünftiger DATEV-Dateiname", width="max"),
             "_FileExt":        None, "_RawBytes": None, "_OcrText": None
