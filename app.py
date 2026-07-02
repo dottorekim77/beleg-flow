@@ -258,25 +258,34 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
         for cell in ws[1]:
             cell.fill, cell.font, cell.border = HEADER_FILL, HEADER_FONT, border_style
 
+        # 📊 엑셀 열 번호 매ping 보완 (index=True이므로 1번째 열은 'Nr.'임)
+        # 4: Beleg-Soll (Original) -> 문자열 데이터일 수 있으므로 우측 정렬 및 처리
+        # 5: Bruttobetrag (EUR), 6: USt/Vorsteuer 19%, 7: Vorsteuer 7%, 8: Nettobetrag (Haben)
         for row in ws.iter_rows(min_row=2):
             for col_idx, cell in enumerate(row, start=1):
                 cell.border = border_style
-                # 수치 데이터 컬럼 서식 지정 (Beleg-Soll, Bruttobetrag, 19%, 7%, Netto)
-                if col_idx in (4, 5, 6, 7, 8):  
-                    cell.number_format = '#,##0.00'
+                
+                # 금액 관련 컬럼 (5번째 열부터 8번째 열까지) 회계/통화 서식 강제 적용
+                if col_idx in (5, 6, 7, 8):
+                    # 소수점 뒤에 0이 와도 강제로 두 자리(00)를 채우고 뒤에 유로 기호 부착
+                    cell.number_format = '#,##0.00_ ;[Rot]-#,##0.00_ ;"-"??_ ;@_'
+                    # 또는 단순한 유로 포맷을 원하시면 아래 주석을 해제하고 사용하셔도 됩니다:
+                    cell.number_format = '#,##0.00" €"'
+                    
+                elif col_idx == 4: # Beleg-Soll (Original)
+                    cell.alignment = Alignment(horizontal="right")
 
         # 🗂️ 엑셀 셀 너비 자동 맞춤 기능 개선 (글자 길이에 따라 여유있게 자동 조절)
         for col in ws.columns:
             max_len = 0
             for cell in col:
                 if cell.value is not None:
-                    # 한글/특수문자가 포함된 경우 바이트 길이를 감안해 길이 보정
                     val_str = str(cell.value)
                     str_len = sum(2 if ord(char) > 128 else 1 for char in val_str)
                     if str_len > max_len:
                         max_len = str_len
             col_letter = col[0].column_letter
-            ws.column_dimensions[col_letter].width = max(max_len + 4, 14)
+            ws.column_dimensions[col_letter].width = max(max_len + 5, 16)
             
     return buf.getvalue()
 
