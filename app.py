@@ -34,14 +34,14 @@ Z_CODE_MAP      = {"Firmenkonto": "BANK", "Kreditkarte": "CC"}
 
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 
-# [신규 추가] 수동 매칭 데이터 마스터 파일 경로
+# 수동 매칭 데이터 마스터 파일 경로
 MAPPING_FILE = "user_mapping.csv"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STREAMLIT PAGE SETUP
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v4.0 - Hybrid Framework)")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v4.1 - Hybrid Framework)")
 st.caption("Automatisierte Belegerfassung mit Sandwich-PDF-Generierung, SKR-Klassifizierung und erweiterten Benutzerregeln.")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -56,7 +56,7 @@ else:
     genai.configure(api_key=API_KEY)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [신규 추가] 사용자 매칭 규칙 데이터베이스 IO 핸들러
+# 사용자 매칭 규칙 데이터베이스 IO 핸들러
 # ══════════════════════════════════════════════════════════════════════════════
 def load_mapping():
     if os.path.exists(MAPPING_FILE):
@@ -218,44 +218,42 @@ def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple[float, flo
     netto = round(brutto_eur - (mwst_19 + mwst_7), 2)
     return mwst_19, mwst_7, netto
 
-# [신규 추가] 가독성 향상 포맷팅 보정 파이프라인 엔진
+# 가독성 향상 포맷팅 보정 및 콤마 분할 스캔 매칭 엔진
 def assign_readability_and_rules(vendor, date_val, inv_val, skr_mode):
     mapping_df = load_mapping()
     v_str = str(vendor).strip() if not pd.isna(vendor) else "Unbekannt"
     v_lower = v_str.lower()
     
-    # 1. 날짜 처리 보정
+    # 1. 날짜 처리 보정 (기능 1: YYYYMMDD에 대시 입히기)
     d_str = str(date_val).strip() if not pd.isna(date_val) else ""
     if len(d_str) == 8 and d_str.isdigit():
         d_str = f"{d_str[:4]}-{d_str[4:6]}-{d_str[6:8]}"
         
-    # 2. 인보이스 코드 교정
+    # 2. 인보이스 코드 교정 (기능 2: I -> INV- 변환)
     i_str = str(inv_val).strip() if not pd.isna(inv_val) else ""
     if i_str.startswith('I') and not i_str.startswith('INV-'):
         i_str = f"INV-{i_str[1:]}"
 
-    # 3. 단골 거래처 계정과목 우선 매칭
+    # 3. 단골 거래처 계정과목 우선 매칭 (기능 4)
     target_col = "SKR04_코드" if skr_mode == "SKR04" else "SKR03_코드"
     
-    # 1순위: 사용자 지정 영구 매칭 테이블 우선 조회 (콤마 분할 스캔 업그레이드)
+    # 1순위: 사용자 지정 영구 매칭 테이블 우선 조회 (콤마 분할 스캔 적용)
     for _, row in mapping_df.iterrows():
         raw_keyword = str(row['판매처_키워드']) if not pd.isna(row['판매처_키워드']) else ""
-        
-        # 콤마(,)로 구분된 단어들을 쪼개서 리스트로 만듦 (공백 제거 및 소문자화)
         keywords = [k.strip().lower() for k in raw_keyword.split(',') if k.strip()]
         
-        # 쪼갠 키워드 중 하나라도 영수증 판매처명에 포함되어 있는지 확인
         if any(k in v_lower for k in keywords):
             code = str(row[target_col]) if not pd.isna(row[target_col]) and str(row[target_col]).strip() else "9999"
             name = str(row['계정과목명']) if not pd.isna(row['계정과목명']) else "Custom Rule"
             return d_str, i_str, f"{code} - {name}"
             
     # 2순위: 내장 시스템 추천 규칙 풀 매칭
-    for key, data in SYSTEM_RECOMMENDATIONS.items():[cite: 2]
-        if key in v_lower:[cite: 2]
-            return d_str, i_str, f"{data[skr_mode]['code']} - {data[skr_mode]['name']} (추천)"[cite: 2]
+    for key, data in SYSTEM_RECOMMENDATIONS.items():
+        if key in v_lower:
+            return d_str, i_str, f"{data[skr_mode]['code']} - {data[skr_mode]['name']} (추천)"
             
     return d_str, i_str, None
+
 # ══════════════════════════════════════════════════════════════════════════════
 # REKALKULATION BEI MANUELLER ÄNDERUNG
 # ══════════════════════════════════════════════════════════════════════════════
@@ -336,7 +334,7 @@ with col_cfg1:
 with col_cfg2:
     selected_skr: str = st.radio("📊 Standardkontenrahmen (SKR)", options=["SKR03", "SKR04"], index=0, horizontal=True)
 
-# 메인 화면과 설정창 화면을 기존의 다른 기능에 방해를 주지 않는 완전히 분리된 독립 탭 구조로 개편
+# 메인 화면과 설정창 화면을 독립 탭 구조로 개편
 tab_dashboard, tab_rules_setup = st.tabs(["📊 DATEV 파싱 및 파일 다운로드", f"⚙️ {selected_skr} 단골 거래처 수동 지정 설정창"])
 
 with tab_dashboard:
@@ -364,7 +362,7 @@ with tab_dashboard:
                     beleg_nr, date_str, vendor, total, currency, kategorie, mwst_type, raw_text = res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7]
                     was_called = res[8] if len(res) > 8 else False
 
-                    # [신규 추가 적용] 수동 데이터베이스 규칙 및 가독성 포맷 전치 처리 적용
+                    # 수동 데이터베이스 규칙 및 가독성 포맷 전치 처리 적용
                     fixed_date, fixed_invoice, matched_skr = assign_readability_and_rules(vendor, date_str, beleg_nr, selected_skr)
                     if matched_skr:
                         kategorie = matched_skr
@@ -405,7 +403,6 @@ with tab_dashboard:
             st.session_state.edited_receipts.index.name = "Nr."
 
         # INTERAKTIVE DATEV-ERFASSUNGSMASKE (DATA EDITOR)
-        # 기능 5: 사용자 편의를 보장하기 위해 명확한 흐름으로 순차 구성된 컬럼 세팅 출력
         st.data_editor(
             st.session_state.edited_receipts,
             use_container_width=True,
@@ -469,7 +466,7 @@ with tab_rules_setup:
     with st.form("user_custom_vendor_form", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
         with col1:
-            v_key = st.text_input("거래처 키워드 (예: DHL, Post, Google)", placeholder="영수증 내 포함될 문자열")
+            v_key = st.text_input("거래처 키워드 (콤마 분할 입력 가능: DHL, DPD, Post)", placeholder="영수증 내 포함될 문자열")
         with col2:
             c_key = st.text_input(f"최우선순위 {selected_skr} 코드 번호", placeholder="예: 4730 또는 6830")
         with col3:
@@ -487,7 +484,7 @@ with tab_rules_setup:
                 }
                 current_mapping = pd.concat([current_mapping, pd.DataFrame([new_rule])], ignore_index=True)
                 save_mapping(current_mapping)
-                st.success(f"✔️ 규칙 저장 완료: {v_key} 키워드가 감지되면 자동으로 {c_key} 코드를 지정합니다.")
+                st.success(f"✔️ 규칙 저장 완료: 키워드가 감지되면 자동으로 {c_key} 코드를 지정합니다.")
                 st.rerun()
             else:
                 st.error("⚠️ 거래처 키워드와 해당 계정 코드는 필수 필드입니다.")
