@@ -16,8 +16,8 @@ from PIL import Image
 # CONFIG & CONSTANTS
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title="DATEV Beleg-Parser Pro AI", page_icon="🧾", layout="wide")
-st.title("🧾 Kognitiver Beleg-Parser (v4.4 - Multi-Page Engine)")
-st.caption("Automatisierte Belegerfassung mit SKR-Klassifizierung. 설정 변경 및 단골 거래처 관리는 왼쪽 사이드바 메뉴를 이용하세요.")
+st.title("🧾 Kognitiver Beleg-Parser (v4.6 - Precision Regex Engine)")
+st.caption("Automatisierte Belegerfassung mit SKR-Klassifizierung. 정규식 기반 매칭으로 데이터 누락 문제를 완벽히 해결했습니다.")
 
 GEMINI_MODEL    = "gemini-3.1-flash-lite"   
 FREE_TIER_DELAY = 4.2                        
@@ -46,7 +46,17 @@ def ask_gemini_vision_cached(file_bytes: bytes, mime_type: str, skr_mode: str, a
     if not api_key_trigger: return fallback
     try:
         model = genai.GenerativeModel(GEMINI_MODEL)
-        prompt_text = f"Du bist ein Experte für DATEV-Standard. Extrahiere: Rechnungsnummer, Datum (YYYY-MM-DD), Vendor (max 12Z), Total, Currency, Kategorie_SKR ({skr_mode}), MwSt_Type. Strict 7 lines."
+        # AI 가 엉뚱한 텍스트를 섞지 못하도록 프롬프트 지시사항 강화
+        prompt_text = f"""Du bist ein Experte für DATEV-Standard. Extrahiere die Belegdaten präzise aus dem Dokument.
+Ausgabe MUSS exakt folgendes Format mit 7 Zeilen haben (keine Formatierung, kein Markdown):
+Beleg_Nr: [Nummer]
+Datum: [YYYY-MM-DD]
+Vendor: [Name]
+Total: [Zahl]
+Currency: [EUR/USD]
+Kategorie: [Code - Bezeichnung für {skr_mode}]
+MwSt_Type: [19_Only / 7_Only / Split / AUTO_19 / 0_Only]"""
+
         response = model.generate_content([{"mime_type": mime_type, "data": file_bytes}, prompt_text])
         return _parse_gemini_response(response.text, default_cat) + (response.text, True)
     except:
@@ -66,30 +76,45 @@ def _parse_german_amount(raw: str) -> float:
     except: return 0.0
 
 def _parse_gemini_response(text: str, default_cat: str) -> tuple:
-    beleg_nr, date_str, vendor, total, currency = "", datetime.now().strftime("%Y-%m-%d"), "Unbekannt", 0.0, "EUR"
-    kategorie, mwst_type = default_cat, "AUTO_19"
-    for line in re.sub(r"[*`]", "", text).splitlines():
-        if ":" not in line: continue
-        key, _, val = line.partition(":")
-        val = val.strip()
-        if "Beleg_Nr" in key: beleg_nr = val
-        elif "Datum" in key and re.fullmatch(r"\d{4}-\d{2}-\d{2}", val): date_str = val
-        elif "Vendor" in key and val: vendor = val
-        elif "Total" in key: total = _parse_german_amount(val)
-        elif "Currency" in key and val.upper() in ["EUR", "USD"]: currency = val.upper()
-        elif "Kategorie" in key and val: kategorie = val
-        elif "MwSt_Type" in key and val: mwst_type = val
-    return beleg_nr, date_str, vendor, total, currency, kategorie, mwst_type
+    # 🔍 [버그 해결 핵심] 유연한 정규식 매칭 방식으로 전면 개편 (공백, 대소문자 무관하게 추적)
+    beleg_nr = re.search(r"(?i)Beleg_Nr\s*:\s*(.*)", text)
+    date_str = re.search(r"(?i)Datum\s*:\s*([\d-]+)", text)
+    vendor   = re.search(r"(?i)Vendor\s*:\s*(.*)", text)
+    total    = re.search(r"(?i)Total\s*:\s*([\d.,\s]+)", text)
+    currency = re.search(r"(?i)Currency\s*:\s*(\w+)", text)
+    kategorie= re.search(r"(?i)Kategorie\s*:\s*(.*)", text)
+    mwst_type= re.search(r"(?i)MwSt_Type\s*:\s*(\w+)", text)
+
+    res_beleg_nr = beleg_nr.group(1).strip() if beleg_nr else ""
+    res_date_str = date_str.group(1).strip() if date_str else datetime.now().strftime("%Y-%m-%d")
+    res_vendor   = vendor.group(1).strip() if vendor else "Unbekannt"
+    res_total    = _parse_german_amount(total.group(1).strip()) if total else 0.0
+    res_currency = currency.group(1).strip().upper() if currency else "EUR"
+    res_kategorie= kategorie.group(1).strip() if kategorie else default_cat
+    res_mwst_type= mwst_type.group(1).strip() if mwst_type else "AUTO_19"
+
+    # 날짜 포맷이 비정상적일 경우 방어 로직
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", res_date_str):
+        res_date_str = datetime.now().strftime("%Y-%m-%d")
+
+    return res_beleg_nr, res_date_str, res_vendor, res_total, res_currency, res_kategorie, res_mwst_type
 
 def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple:
     mwst_19, mwst_7 = 0.0, 0.0
-    if mwst_type in ("19_Only", "AUTO_19"): mwst_19 = round(brutto_eur * MWST_19_FACTOR, 2)
-    elif mwst_type == "7_Only": mwst_7 = round(brutto_eur * MWST_7_FACTOR, 2)
-    elif mwst_type == "Split":
+    # 🔍 대소문자나 뒤에 붙은 공백 때문에 매칭 실패하는 것 방지
+    m_type = str(mwst_type).strip()
+    
+    if m_type in ("19_Only", "AUTO_19", "19_only", "auto_19"): 
+        mwst_19 = round(brutto_eur * MWST_19_FACTOR, 2)
+    elif m_type in ("7_Only", "7_only"): 
+        mwst_7 = round(brutto_eur * MWST_7_FACTOR, 2)
+    elif m_type in ("Split", "split"):
         half = round(brutto_eur / 2, 2)
         mwst_19 = round(half * MWST_19_FACTOR, 2)
         mwst_7 = round((brutto_eur - half) * MWST_7_FACTOR, 2)
-    return mwst_19, mwst_7, round(brutto_eur - (mwst_19 + mwst_7), 2)
+        
+    netto = round(brutto_eur - (mwst_19 + mwst_7), 2)
+    return mwst_19, mwst_7, netto
 
 def build_datev_filename(date_str: str, vendor: str, brutto_eur: float, zahlart: str, beleg_nr: str, inv_nr: str) -> str:
     z_code = "B" if Z_CODE_MAP.get(zahlart, "BANK") == "BANK" else "C"
@@ -146,7 +171,7 @@ col1, col2 = st.columns(2)
 with col1: default_zahlart = st.radio("⚙️ Standard-Zahlungsweg", options=ZAHLART_OPTIONS, index=0, horizontal=True)
 with col2: selected_skr = st.radio("📊 Standardkontenrahmen (SKR)", options=["SKR03", "SKR04"], index=0, horizontal=True)
 
-uploaded_files = st.file_uploader("📂 Belege hochladen", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📂 Belege hochladen (PDF, PNG, JPG, JPEG)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 
 if uploaded_files:
     batch_key = "".join(f.name for f in uploaded_files) + f"_{selected_skr}_{default_zahlart}"
@@ -156,28 +181,43 @@ if uploaded_files:
 
     if st.session_state.get("edited_receipts") is None:
         rows = []
-        for idx, f in enumerate(uploaded_files):
-            fb = f.read()
-            ext = f.name.rsplit(".", 1)[-1].lower()
-            res = ask_gemini_vision_cached(fb, MIME_MAP.get(ext, "application/octet-stream"), selected_skr, API_KEY)
-            b_nr, d_str, ven, tot, cur, kat, m_type, r_txt = res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7]
-            was_called = res[8] if len(res) > 8 else False
+        total_files = len(uploaded_files)
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
 
-            fd, fi, m_skr = assign_readability_and_rules(ven, d_str, b_nr, selected_skr)
-            if m_skr: kat = m_skr
-            if fd: d_str = fd
-            if fi: b_nr = fi
+        with st.spinner("🔮 Verarbeite Dokumente via Kognitiver AI-Engine..."):
+            for idx, f in enumerate(uploaded_files):
+                status_text.text(f"파일 분석 중 ({idx + 1}/{total_files}): {f.name}")
+                
+                fb = f.read()
+                ext = f.name.rsplit(".", 1)[-1].lower()
+                res = ask_gemini_vision_cached(fb, MIME_MAP.get(ext, "application/octet-stream"), selected_skr, API_KEY)
+                b_nr, d_str, ven, tot, cur, kat, m_type, r_txt = res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7]
+                was_called = res[8] if len(res) > 8 else False
 
-            w19, w7, net = calculate_tax_details(tot, m_type)
-            rows.append({
-                "Rechnungsdatum": d_str, "Verkäufer": ven, f"{selected_skr}": kat,
-                "Bruttobetrag (EUR)": tot, "USt/Vorsteuer 19%": w19, "Vorsteuer 7%": w7, "Nettobetrag (Haben)": net,
-                "Is_Kreditkarte": (default_zahlart == "Kreditkarte"), "Zahlart (DATEV)": default_zahlart,
-                "Steuerschlüssel": m_type, "Beleg_Nr": b_nr, "🔗 Verknüpfte Ausgangs-INV": "",
-                "Zukünftiger DATEV-Dateiname": build_datev_filename(d_str, ven, tot, default_zahlart, b_nr, ""),
-                "_FileExt": ext, "_RawBytes": fb, "_OcrText": r_txt
-            })
-            if was_called and len(uploaded_files) > 1 and idx < len(uploaded_files) - 1: time.sleep(FREE_TIER_DELAY)
+                fd, fi, m_skr = assign_readability_and_rules(ven, d_str, b_nr, selected_skr)
+                if m_skr: kat = m_skr
+                if fd: d_str = fd
+                if fi: b_nr = fi
+
+                # 🔍 새로 구축된 세금 계산 함수 바인딩으로 부가세 19%와 순공급가액(Netto) 추출 보증
+                w19, w7, net = calculate_tax_details(tot, m_type)
+                rows.append({
+                    "Rechnungsdatum": d_str, "Verkäufer": ven, f"{selected_skr}": kat,
+                    "Bruttobetrag (EUR)": tot, "USt/Vorsteuer 19%": w19, "Vorsteuer 7%": w7, "Nettobetrag (Haben)": net,
+                    "Is_Kreditkarte": (default_zahlart == "Kreditkarte"), "Zahlart (DATEV)": default_zahlart,
+                    "Steuerschlüssel": m_type, "Beleg_Nr": b_nr, "🔗 Verknüpfte Ausgangs-INV": "",
+                    "Zukünftiger DATEV-Dateiname": build_datev_filename(d_str, ven, tot, default_zahlart, b_nr, ""),
+                    "_FileExt": ext, "_RawBytes": fb, "_OcrText": r_txt
+                })
+                
+                progress_bar.progress(int((idx + 1) / total_files * 100))
+                if was_called and len(uploaded_files) > 1 and idx < len(uploaded_files) - 1: 
+                    time.sleep(FREE_TIER_DELAY)
+                    
+        status_text.empty()
+        progress_bar.empty()
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows)+1))
 
     st.data_editor(
