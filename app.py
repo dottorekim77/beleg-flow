@@ -16,8 +16,8 @@ from PIL import Image
 # CONFIG & CONSTANTS
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title="DATEV Beleg-Parser Pro AI", page_icon="🧾", layout="wide")
-st.title("🧾 Kognitiver Beleg-Parser (v4.6 - Precision Regex Engine)")
-st.caption("Automatisierte Belegerfassung mit SKR-Klassifizierung. 정규식 기반 매칭으로 데이터 누락 문제를 완벽히 해결했습니다.")
+st.title("🧾 Kognitiver Beleg-Parser (v4.7 - UI Formatting Fixed)")
+st.caption("Automatisierte Belegerfassung mit SKR-Klassifizierung. 데이터 에디터의 화폐 단위 및 천 단위 쉼표 출력을 정상 복구했습니다.")
 
 GEMINI_MODEL    = "gemini-3.1-flash-lite"   
 FREE_TIER_DELAY = 4.2                        
@@ -46,7 +46,6 @@ def ask_gemini_vision_cached(file_bytes: bytes, mime_type: str, skr_mode: str, a
     if not api_key_trigger: return fallback
     try:
         model = genai.GenerativeModel(GEMINI_MODEL)
-        # AI 가 엉뚱한 텍스트를 섞지 못하도록 프롬프트 지시사항 강화
         prompt_text = f"""Du bist ein Experte für DATEV-Standard. Extrahiere die Belegdaten präzise aus dem Dokument.
 Ausgabe MUSS exakt folgendes Format mit 7 Zeilen haben (keine Formatierung, kein Markdown):
 Beleg_Nr: [Nummer]
@@ -76,7 +75,6 @@ def _parse_german_amount(raw: str) -> float:
     except: return 0.0
 
 def _parse_gemini_response(text: str, default_cat: str) -> tuple:
-    # 🔍 [버그 해결 핵심] 유연한 정규식 매칭 방식으로 전면 개편 (공백, 대소문자 무관하게 추적)
     beleg_nr = re.search(r"(?i)Beleg_Nr\s*:\s*(.*)", text)
     date_str = re.search(r"(?i)Datum\s*:\s*([\d-]+)", text)
     vendor   = re.search(r"(?i)Vendor\s*:\s*(.*)", text)
@@ -93,7 +91,6 @@ def _parse_gemini_response(text: str, default_cat: str) -> tuple:
     res_kategorie= kategorie.group(1).strip() if kategorie else default_cat
     res_mwst_type= mwst_type.group(1).strip() if mwst_type else "AUTO_19"
 
-    # 날짜 포맷이 비정상적일 경우 방어 로직
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", res_date_str):
         res_date_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -101,9 +98,7 @@ def _parse_gemini_response(text: str, default_cat: str) -> tuple:
 
 def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple:
     mwst_19, mwst_7 = 0.0, 0.0
-    # 🔍 대소문자나 뒤에 붙은 공백 때문에 매칭 실패하는 것 방지
     m_type = str(mwst_type).strip()
-    
     if m_type in ("19_Only", "AUTO_19", "19_only", "auto_19"): 
         mwst_19 = round(brutto_eur * MWST_19_FACTOR, 2)
     elif m_type in ("7_Only", "7_only"): 
@@ -112,9 +107,7 @@ def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple:
         half = round(brutto_eur / 2, 2)
         mwst_19 = round(half * MWST_19_FACTOR, 2)
         mwst_7 = round((brutto_eur - half) * MWST_7_FACTOR, 2)
-        
-    netto = round(brutto_eur - (mwst_19 + mwst_7), 2)
-    return mwst_19, mwst_7, netto
+    return mwst_19, mwst_7, round(brutto_eur - (mwst_19 + mwst_7), 2)
 
 def build_datev_filename(date_str: str, vendor: str, brutto_eur: float, zahlart: str, beleg_nr: str, inv_nr: str) -> str:
     z_code = "B" if Z_CODE_MAP.get(zahlart, "BANK") == "BANK" else "C"
@@ -201,7 +194,6 @@ if uploaded_files:
                 if fd: d_str = fd
                 if fi: b_nr = fi
 
-                # 🔍 새로 구축된 세금 계산 함수 바인딩으로 부가세 19%와 순공급가액(Netto) 추출 보증
                 w19, w7, net = calculate_tax_details(tot, m_type)
                 rows.append({
                     "Rechnungsdatum": d_str, "Verkäufer": ven, f"{selected_skr}": kat,
@@ -220,7 +212,27 @@ if uploaded_files:
         progress_bar.empty()
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows)+1))
 
+    # 🔍 [화폐 기호 & 천 단위 쉼표 완벽 바인딩 복구 완료]
     st.data_editor(
-        st.session_state.edited_receipts, use_container_width=True, height=400, key="beleg_editor_key", on_change=on_table_edited,
-        column_config={"_FileExt": None, "_RawBytes": None, "_OcrText": None}
+        st.session_state.edited_receipts, 
+        use_container_width=True, 
+        height=400, 
+        key="beleg_editor_key", 
+        on_change=on_table_edited,
+        column_config={
+            "Rechnungsdatum": st.column_config.TextColumn("Rechnungsdatum", width="medium"),
+            "Beleg_Nr": st.column_config.TextColumn("Beleg_Nr", width="medium"),
+            "Verkäufer": st.column_config.TextColumn("Verkäufer", width="medium"),
+            f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="large"),
+            "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €"),
+            "USt/Vorsteuer 19%": st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
+            "Vorsteuer 7%": st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
+            "Nettobetrag (Haben)": st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
+            "Is_Kreditkarte": st.column_config.CheckboxColumn("💳"),
+            "Zahlart (DATEV)": st.column_config.TextColumn("Zahlart (DATEV)", disabled=True, width="small"),
+            "Steuerschlüssel": st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
+            "🔗 Verknüpfte Ausgangs-INV": st.column_config.TextColumn("🔗 Verknüpfte Ausgangs-INV"),
+            "Zukünftiger DATEV-Dateiname": st.column_config.TextColumn("Zukünftiger DATEV-Dateiname", width="max"),
+            "_FileExt": None, "_RawBytes": None, "_OcrText": None
+        }
     )
