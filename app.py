@@ -224,33 +224,38 @@ def assign_readability_and_rules(vendor, date_val, inv_val, skr_mode):
     v_str = str(vendor).strip() if not pd.isna(vendor) else "Unbekannt"
     v_lower = v_str.lower()
     
-    # 1. 날짜 처리 보정 (기능 1: YYYYMMDD 또는 공백 유무에 대시 입히기)
+    # 1. 날짜 처리 보정
     d_str = str(date_val).strip() if not pd.isna(date_val) else ""
     if len(d_str) == 8 and d_str.isdigit():
         d_str = f"{d_str[:4]}-{d_str[4:6]}-{d_str[6:8]}"
         
-    # 2. 인보이스 코드 교정 (기능 2: I -> INV- 변환)
+    # 2. 인보이스 코드 교정
     i_str = str(inv_val).strip() if not pd.isna(inv_val) else ""
     if i_str.startswith('I') and not i_str.startswith('INV-'):
         i_str = f"INV-{i_str[1:]}"
 
-    # 3. 단골 거래처 계정과목 우선 매칭 (기능 4)
+    # 3. 단골 거래처 계정과목 우선 매칭
     target_col = "SKR04_코드" if skr_mode == "SKR04" else "SKR03_코드"
     
-    # 1순위: 사용자 지정 영구 매칭 테이블 우선 조회
+    # 1순위: 사용자 지정 영구 매칭 테이블 우선 조회 (콤마 분할 스캔 업그레이드)
     for _, row in mapping_df.iterrows():
-        if str(row['판매처_키워드']).lower() in v_lower:
+        raw_keyword = str(row['판매처_키워드']) if not pd.isna(row['판매처_키워드']) else ""
+        
+        # 콤마(,)로 구분된 단어들을 쪼개서 리스트로 만듦 (공백 제거 및 소문자화)
+        keywords = [k.strip().lower() for k in raw_keyword.split(',') if k.strip()]
+        
+        # 쪼갠 키워드 중 하나라도 영수증 판매처명에 포함되어 있는지 확인
+        if any(k in v_lower for k in keywords):
             code = str(row[target_col]) if not pd.isna(row[target_col]) and str(row[target_col]).strip() else "9999"
             name = str(row['계정과목명']) if not pd.isna(row['계정과목명']) else "Custom Rule"
             return d_str, i_str, f"{code} - {name}"
             
     # 2순위: 내장 시스템 추천 규칙 풀 매칭
-    for key, data in SYSTEM_RECOMMENDATIONS.items():
-        if key in v_lower:
-            return d_str, i_str, f"{data[skr_mode]['code']} - {data[skr_mode]['name']} (추천)"
+    for key, data in SYSTEM_RECOMMENDATIONS.items():[cite: 2]
+        if key in v_lower:[cite: 2]
+            return d_str, i_str, f"{data[skr_mode]['code']} - {data[skr_mode]['name']} (추천)"[cite: 2]
             
     return d_str, i_str, None
-
 # ══════════════════════════════════════════════════════════════════════════════
 # REKALKULATION BEI MANUELLER ÄNDERUNG
 # ══════════════════════════════════════════════════════════════════════════════
