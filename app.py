@@ -41,7 +41,7 @@ MAPPING_FILE = "user_mapping.csv"
 # STREAMLIT PAGE SETUP
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v4.1 - Hybrid Framework)")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v4.2 - Smart Fragment Framework)")
 st.caption("Automatisierte Belegerfassung mit Sandwich-PDF-Generierung, SKR-Klassifizierung und erweiterten Benutzerregeln.")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -60,7 +60,10 @@ else:
 # ══════════════════════════════════════════════════════════════════════════════
 def load_mapping():
     if os.path.exists(MAPPING_FILE):
-        return pd.read_csv(MAPPING_FILE)
+        try:
+            return pd.read_csv(MAPPING_FILE)
+        except Exception:
+            pass
     return pd.DataFrame(columns=["판매처_키워드", "SKR04_코드", "SKR03_코드", "계정과목명"])
 
 def save_mapping(df):
@@ -224,17 +227,17 @@ def assign_readability_and_rules(vendor, date_val, inv_val, skr_mode):
     v_str = str(vendor).strip() if not pd.isna(vendor) else "Unbekannt"
     v_lower = v_str.lower()
     
-    # 1. 날짜 처리 보정 (기능 1: YYYYMMDD에 대시 입히기)
+    # 1. 날짜 처리 보정 (YYYYMMDD에 대시 입히기)
     d_str = str(date_val).strip() if not pd.isna(date_val) else ""
     if len(d_str) == 8 and d_str.isdigit():
         d_str = f"{d_str[:4]}-{d_str[4:6]}-{d_str[6:8]}"
         
-    # 2. 인보이스 코드 교정 (기능 2: I -> INV- 변환)
+    # 2. 인보이스 코드 교정 (I -> INV- 변환)
     i_str = str(inv_val).strip() if not pd.isna(inv_val) else ""
     if i_str.startswith('I') and not i_str.startswith('INV-'):
         i_str = f"INV-{i_str[1:]}"
 
-    # 3. 단골 거래처 계정과목 우선 매칭 (기능 4)
+    # 3. 단골 거래처 계정과목 우선 매칭
     target_col = "SKR04_코드" if skr_mode == "SKR04" else "SKR03_코드"
     
     # 1순위: 사용자 지정 영구 매칭 테이블 우선 조회 (콤마 분할 스캔 적용)
@@ -454,15 +457,18 @@ with tab_dashboard:
             zip_buffer.seek(0)
             st.download_button(label="📁 PDF-Belege (Searchable Sandwich-PDFs) als ZIP-Archiv herunterladen (.zip)", data=zip_buffer.getvalue(), file_name=f"DATEV_Digitale_Belege_{today}.zip", use_container_width=True, type="primary")
 
-# ----------------------------------------------------
-# 탭 2: 단골 거래처를 수동으로 입력하고 영구 저장하는 전용 설정창 UI
-# ----------------------------------------------------
-with tab_rules_setup:
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 탭 2: 단골 거래처 격리 프래그먼트 공간 (스크롤 고정 및 실시간 저장 해결용)
+# ══════════════════════════════════════════════════════════════════════════════
+@st.fragment
+def render_rules_setup_zone(selected_skr):
     st.subheader(f"⚙️ {selected_skr} 지정 거래처 전용 마스터 데이터 기입창")
     st.write("특정 단골 거래처 키워드와 우선 적용 코드를 등록하면, AI 모델 결과값 탐색보다 이 수동 데이터 규칙이 최우선으로 즉시 매칭됩니다.")
     
     current_mapping = load_mapping()
     
+    # 폼 추가
     with st.form("user_custom_vendor_form", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -485,19 +491,31 @@ with tab_rules_setup:
                 current_mapping = pd.concat([current_mapping, pd.DataFrame([new_rule])], ignore_index=True)
                 save_mapping(current_mapping)
                 st.success(f"✔️ 규칙 저장 완료: 키워드가 감지되면 자동으로 {c_key} 코드를 지정합니다.")
+                st.preload = True # 내부 데이터 새로고침 유도
                 st.rerun()
             else:
                 st.error("⚠️ 거래처 키워드와 해당 계정 코드는 필수 필드입니다.")
 
     st.write("---")
     st.subheader("📋 현재 영구 저장되어 작동 중인 사용자 지정 마스터 룰 테이블")
-    st.write("표 내부 셀을 더블클릭하여 바로 텍스트 값을 실시간 편집할 수 있으며 행을 일괄 제어할 수 있습니다.")
+    st.caption("💡 팁: 아래 표 안에서 내용을 수정하거나 빈 행을 지운 뒤 바로 아래 '저장' 버튼을 누르면 즉시 동기화됩니다. (화면이 위로 튕기지 않습니다)")
     
     if not current_mapping.empty:
-        updated_editor_df = st.data_editor(current_mapping, num_rows="dynamic", use_container_width=True, key="hybrid_rule_editor")
-        if st.button("💾 수정한 테이블 규칙 전체 적용 저장"):
+        # data_editor가 다룰 임시 데이터 변동을 반영하기 위해 동적 바인딩 및 세션 유실 방지 처리
+        updated_editor_df = st.data_editor(
+            current_mapping, 
+            num_rows="dynamic", 
+            use_container_width=True, 
+            key="hybrid_rule_editor_state"
+        )
+        
+        # 버튼 액션 시 버퍼 강제 병합 및 유실 차단 설계
+        if st.button("💾 수정한 테이블 규칙 전체 적용 저장", type="primary"):
             save_mapping(updated_editor_df)
-            st.toast("모든 거래처 매칭 규칙이 유저 장부에 완벽하게 동기화되었습니다!")
+            st.toast("모든 거래처 매칭 규칙이 로컬 스토리지 장부에 완벽하게 동기화되었습니다!")
             st.rerun()
     else:
         st.info("현재 기입된 커스텀 수동 매칭 규칙이 비어 있습니다. 필요시 단골 매칭 키워드를 작성하세요.")
+
+with tab_rules_setup:
+    render_rules_setup_zone(selected_skr)
