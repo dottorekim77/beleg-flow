@@ -255,7 +255,7 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
 with st.expander("📝 Buchungsregeln verwalten", expanded=False):
     st.caption("Verwalten Sie hier Ihre automatischen Zuweisungsregeln für bekannte Kreditoren.")
     
-    with St.form("new_rule_form", clear_on_submit=True):
+    with st.form("new_rule_form", clear_on_submit=True):
         c1, c2, c3 = st.columns([2, 3, 3])
         with c1: new_vendor = st.text_input("Vendor", placeholder="z.B. Apple")
         with c2: new_skr03  = st.text_input("SKR03", placeholder="z.B. 4930")
