@@ -44,28 +44,24 @@ INITIAL_VENDORS = {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STREAMLIT PAGE SETUP & PAGE RULES SETUP (화면 튐/움직임 방지 CSS)
+# STREAMLIT PAGE SETUP
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 
-# 💡 핵심: 데이터 에디터 입력 시 스크롤 위치 고정 및 가로 정렬 고정 CSS 세팅
 st.markdown("""
     <style>
         [data-testid="stSidebarNav"] {display: none !important;}
         section[data-testid="stSidebar"] {display: none !important;}
         .block-container {padding-top: 2rem !important; padding-bottom: 2rem !important;}
         
-        /* 테이블 셀 수정 시 포커스 아웃될 때 레이아웃 흔들림 방지 */
+        /* 테이블 인터랙션 시 오버앵커 비활성화 */
         .stDataEditor div {
             overflow-anchor: none !important;
-        }
-        html {
-            scroll-behavior: auto !important;
         }
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v5.4 - Fix Scroll Shifting)")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v5.5 - Fragment Lock)")
 st.caption("Automatisierte Belegfassung mit SKR-Klassifizierung. Nur verifizierte Konten werden ausgefüllt, der Rest bleibt für den Steuerberater übersichtlich leer.")
 
 if "custom_rules" not in st.session_state:
@@ -227,7 +223,6 @@ def on_table_edited() -> None:
             str(df.at[label, "Rechnungsdatum"]), str(df.at[label, "Verkäufer"]), brutto_eur,
             str(df.at[label, "Zahlweg (DATEV)"]), str(df.at[label, "Beleg_Nr"]), str(df.at[label, "🔗 Ausgangs-INV"])
         )
-    # 데이터만 업데이트하고 세션 상태 유지 (st.rerun 방지)
     st.session_state.edited_receipts = df
 
 def build_excel_bytes(df: pd.DataFrame) -> bytes:
@@ -344,25 +339,32 @@ if uploaded_files:
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
-    # 🔄 DATA EDITOR (CSS 트릭 및 고정 레이아웃)
-    st.data_editor(
-        st.session_state.edited_receipts,
-        use_container_width=True, num_rows="fixed", height=400, key="beleg_editor_key", on_change=on_table_edited,
-        column_config={
-            f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium"),
-            "Beleg-Soll (Orig.)":    st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True), 
-            "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €"),
-            "USt/Vorsteuer 19%":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
-            "Vorsteuer 7%":   st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
-            "Nettobetrag (Haben)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
-            "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳"),
-            "Zahlweg (DATEV)":         st.column_config.TextColumn("Zahlweg (DATEV)", disabled=True, width="small"),
-            "Steuerschlüssel":       st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
-            "🔗 Ausgangs-INV":  st.column_config.TextColumn("🔗 Ausgangs-INV"),
-            "Zukünftiger DATEV-Dateiname": st.column_config.TextColumn("Zukünftiger DATEV-Dateiname", width="max"),
-            "_FileExt": None, "_RawBytes": None, "_OcrText": None
-        },
-    )
+    # ══════════════════════════════════════════════════════════════════════════
+    # 🔒 핵심 수정 사항: st.fragment를 사용하여 에디터 영역의 리렌더링 분리
+    # ══════════════════════════════════════════════════════════════════════════
+    @st.fragment
+    def render_isolated_data_editor():
+        st.data_editor(
+            st.session_state.edited_receipts,
+            use_container_width=True, num_rows="fixed", height=400, key="beleg_editor_key", on_change=on_table_edited,
+            column_config={
+                f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium"),
+                "Beleg-Soll (Orig.)":    st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True), 
+                "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €"),
+                "USt/Vorsteuer 19%":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
+                "Vorsteuer 7%":   st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
+                "Nettobetrag (Haben)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
+                "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳"),
+                "Zahlweg (DATEV)":         st.column_config.TextColumn("Zahlweg (DATEV)", disabled=True, width="small"),
+                "Steuerschlüssel":       st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
+                "🔗 Ausgangs-INV":  st.column_config.TextColumn("🔗 Ausgangs-INV"),
+                "Zukünftiger DATEV-Dateiname": st.column_config.TextColumn("Zukünftiger DATEV-Dateiname", width="max"),
+                "_FileExt": None, "_RawBytes": None, "_OcrText": None
+            },
+        )
+
+    # 파싱이 완료된 테이블을 렌더링 영역으로 호출
+    render_isolated_data_editor()
 
     # DOWNLOADS
     df_final = st.session_state.edited_receipts
