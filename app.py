@@ -41,7 +41,7 @@ MAPPING_FILE = "user_mapping.csv"
 # STREAMLIT PAGE SETUP
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v4.2 - Smart Fragment Framework)")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v4.3 - Stable Async Framework)")
 st.caption("Automatisierte Belegerfassung mit Sandwich-PDF-Generierung, SKR-Klassifizierung und erweiterten Benutzerregeln.")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -227,12 +227,12 @@ def assign_readability_and_rules(vendor, date_val, inv_val, skr_mode):
     v_str = str(vendor).strip() if not pd.isna(vendor) else "Unbekannt"
     v_lower = v_str.lower()
     
-    # 1. 날짜 처리 보정 (YYYYMMDD에 대시 입히기)
+    # 1. 날짜 처리 보정
     d_str = str(date_val).strip() if not pd.isna(date_val) else ""
     if len(d_str) == 8 and d_str.isdigit():
         d_str = f"{d_str[:4]}-{d_str[4:6]}-{d_str[6:8]}"
         
-    # 2. 인보이스 코드 교정 (I -> INV- 변환)
+    # 2. 인보이스 코드 교정
     i_str = str(inv_val).strip() if not pd.isna(inv_val) else ""
     if i_str.startswith('I') and not i_str.startswith('INV-'):
         i_str = f"INV-{i_str[1:]}"
@@ -240,7 +240,6 @@ def assign_readability_and_rules(vendor, date_val, inv_val, skr_mode):
     # 3. 단골 거래처 계정과목 우선 매칭
     target_col = "SKR04_코드" if skr_mode == "SKR04" else "SKR03_코드"
     
-    # 1순위: 사용자 지정 영구 매칭 테이블 우선 조회 (콤마 분할 스캔 적용)
     for _, row in mapping_df.iterrows():
         raw_keyword = str(row['판매처_키워드']) if not pd.isna(row['판매처_키워드']) else ""
         keywords = [k.strip().lower() for k in raw_keyword.split(',') if k.strip()]
@@ -250,7 +249,6 @@ def assign_readability_and_rules(vendor, date_val, inv_val, skr_mode):
             name = str(row['계정과목명']) if not pd.isna(row['계정과목명']) else "Custom Rule"
             return d_str, i_str, f"{code} - {name}"
             
-    # 2순위: 내장 시스템 추천 규칙 풀 매칭
     for key, data in SYSTEM_RECOMMENDATIONS.items():
         if key in v_lower:
             return d_str, i_str, f"{data[skr_mode]['code']} - {data[skr_mode]['name']} (추천)"
@@ -328,7 +326,7 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN BENUTZEROBERFLÆCHE (UI) - 하이브리드 레이아웃 탭 구조
+# MAIN BENUTZEROBERFLÆCHE (UI) 
 # ══════════════════════════════════════════════════════════════════════════════
 
 col_cfg1, col_cfg2 = st.columns(2)
@@ -337,7 +335,7 @@ with col_cfg1:
 with col_cfg2:
     selected_skr: str = st.radio("📊 Standardkontenrahmen (SKR)", options=["SKR03", "SKR04"], index=0, horizontal=True)
 
-# 메인 화면과 설정창 화면을 독립 탭 구조로 개편
+# 메인 탭 레이아웃 분리
 tab_dashboard, tab_rules_setup = st.tabs(["📊 DATEV 파싱 및 파일 다운로드", f"⚙️ {selected_skr} 단골 거래처 수동 지정 설정창"])
 
 with tab_dashboard:
@@ -365,7 +363,6 @@ with tab_dashboard:
                     beleg_nr, date_str, vendor, total, currency, kategorie, mwst_type, raw_text = res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7]
                     was_called = res[8] if len(res) > 8 else False
 
-                    # 수동 데이터베이스 규칙 및 가독성 포맷 전치 처리 적용
                     fixed_date, fixed_invoice, matched_skr = assign_readability_and_rules(vendor, date_str, beleg_nr, selected_skr)
                     if matched_skr:
                         kategorie = matched_skr
@@ -459,16 +456,17 @@ with tab_dashboard:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 탭 2: 단골 거래처 격리 프래그먼트 공간 (스크롤 고정 및 실시간 저장 해결용)
+# 탭 2: 단골 거래처 독립 세션 상태 핸들링 존 (무한 로딩 차단 및 스크롤 고정)
 # ══════════════════════════════════════════════════════════════════════════════
-@st.fragment
-def render_rules_setup_zone(selected_skr):
+with tab_rules_setup:
     st.subheader(f"⚙️ {selected_skr} 지정 거래처 전용 마스터 데이터 기입창")
     st.write("특정 단골 거래처 키워드와 우선 적용 코드를 등록하면, AI 모델 결과값 탐색보다 이 수동 데이터 규칙이 최우선으로 즉시 매칭됩니다.")
     
-    current_mapping = load_mapping()
-    
-    # 폼 추가
+    # 세션 상태를 활용해 외부 스크립트 재실행 시 데이터 증발 차단
+    if "mapping_data" not in st.session_state:
+        st.session_state.mapping_data = load_mapping()
+
+    # 1. 상단 데이터 추가 단일 폼 (clear_on_submit 작동 보증)
     with st.form("user_custom_vendor_form", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -488,34 +486,26 @@ def render_rules_setup_zone(selected_skr):
                     "SKR04_코드": c_key.strip() if selected_skr == "SKR04" else "",
                     "SKR03_코드": c_key.strip() if selected_skr == "SKR03" else ""
                 }
-                current_mapping = pd.concat([current_mapping, pd.DataFrame([new_rule])], ignore_index=True)
-                save_mapping(current_mapping)
-                st.success(f"✔️ 규칙 저장 완료: 키워드가 감지되면 자동으로 {c_key} 코드를 지정합니다.")
-                st.preload = True # 내부 데이터 새로고침 유도
-                st.rerun()
+                st.session_state.mapping_data = pd.concat([st.session_state.mapping_data, pd.DataFrame([new_rule])], ignore_index=True)
+                save_mapping(st.session_state.mapping_data)
+                st.success(f"✔️ 규칙이 정상적으로 리스트에 추가되었습니다!")
             else:
                 st.error("⚠️ 거래처 키워드와 해당 계정 코드는 필수 필드입니다.")
 
     st.write("---")
     st.subheader("📋 현재 영구 저장되어 작동 중인 사용자 지정 마스터 룰 테이블")
-    st.caption("💡 팁: 아래 표 안에서 내용을 수정하거나 빈 행을 지운 뒤 바로 아래 '저장' 버튼을 누르면 즉시 동기화됩니다. (화면이 위로 튕기지 않습니다)")
-    
-    if not current_mapping.empty:
-        # data_editor가 다룰 임시 데이터 변동을 반영하기 위해 동적 바인딩 및 세션 유실 방지 처리
-        updated_editor_df = st.data_editor(
-            current_mapping, 
-            num_rows="dynamic", 
-            use_container_width=True, 
-            key="hybrid_rule_editor_state"
-        )
-        
-        # 버튼 액션 시 버퍼 강제 병합 및 유실 차단 설계
-        if st.button("💾 수정한 테이블 규칙 전체 적용 저장", type="primary"):
-            save_mapping(updated_editor_df)
-            st.toast("모든 거래처 매칭 규칙이 로컬 스토리지 장부에 완벽하게 동기화되었습니다!")
-            st.rerun()
-    else:
-        st.info("현재 기입된 커스텀 수동 매칭 규칙이 비어 있습니다. 필요시 단골 매칭 키워드를 작성하세요.")
+    st.caption("💡 사용 방법: 아래 표 내부를 더블클릭하여 내용을 편집하거나 신규 행을 생성/삭제한 후, 반드시 아래 **'💾 변경사항 최종 저장하기'** 버튼을 클릭해 주세요.")
 
-with tab_rules_setup:
-    render_rules_setup_zone(selected_skr)
+    # 2. 독립 Key 지정을 통한 데이터 버퍼 상태 분리 (스크롤 고정 및 실시간 무한 새로고침 현상 해결)
+    updated_df = st.data_editor(
+        st.session_state.mapping_data, 
+        num_rows="dynamic", 
+        use_container_width=True,
+        key="editor_raw_buffer_zone"
+    )
+
+    # 3. 데이터 수동 일괄 저장 버튼 (먹통 버그 해결 및 완벽 바인딩)
+    if st.button("💾 변경사항 최종 저장하기", type="primary", key="save_rule_btn_action"):
+        st.session_state.mapping_data = updated_df
+        save_mapping(updated_df)
+        st.toast("정상적으로 모든 데이터 규칙이 파일에 영구 동기화되었습니다!")
