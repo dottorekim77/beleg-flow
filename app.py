@@ -33,7 +33,7 @@ Z_CODE_MAP      = {"Firmenkonto": "BANK", "Kreditkarte": "CC"}
 
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 
-# 💡 기본 수록된 매핑 데이터 (세션 초기화용 초기값)
+# 💡 기본 수록된 매핑 데이터
 INITIAL_VENDORS = {
     "Adobe":      {"SKR03": "4930 - Bürobedarf", "SKR04": "6815 - Bürobedarf"},
     "Amazon":     {"SKR03": "4980 - Betriebsbedarf", "SKR04": "6300 - Sonstige Aufwendungen"},
@@ -49,7 +49,6 @@ INITIAL_VENDORS = {
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 
-# 사이드바 완전 차단 및 상하 여백 최적화
 st.markdown("""
     <style>
         [data-testid="stSidebarNav"] {display: none !important;}
@@ -58,10 +57,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v5.1 - Integrated Rules)")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v5.2 - Pure German Rules)")
 st.caption("Automatisierte Belegfassung mit SKR-Klassifizierung. Nur verifizierte Konten werden ausgefüllt, der Rest bleibt für den Steuerberater übersichtlich leer.")
 
-# 세션 상태 초기화 (초기 규칙 등록 및 에디터 대기용)
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = INITIAL_VENDORS.copy()
 if "edited_receipts" not in st.session_state:
@@ -96,7 +94,6 @@ def ask_gemini_vision_cached(file_bytes: bytes, mime_type: str, skr_mode: str, a
 
 def get_assigned_account(vendor_name: str, skr_mode: str) -> str:
     v_upper = vendor_name.upper()
-    # 세션에 저장된 동적 규칙 풀에서 매핑 확인
     for keyword, accounts in st.session_state.custom_rules.items():
         if keyword.upper() in v_upper:
             return accounts[skr_mode]
@@ -255,28 +252,35 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
 # MAIN UI
 # ══════════════════════════════════════════════════════════════════════════════
 
-# 📦 [1번 핵심 업데이트] 메인 대시보드 내 통합형 분개 규칙 관리 인터페이스
-with st.expander("📝 Buchungsregeln verwalten (SKR 매핑 규칙 관리)", expanded=False):
-    st.markdown("자주 이용하는 Vendor(판매처)별 SKR03/SKR04 고정 분개 계정을 등록할 수 있습니다.")
+# 📝 순수 독일어 간결화 및 개별 규칙 삭제 기능 적용 영역
+with st.expander("📝 Buchungsregeln verwalten", expanded=False):
+    st.caption("Verwalten Sie hier Ihre automatischen Zuweisungsregeln für bekannte Kreditoren.")
     
     # 신규 규칙 추가 폼
     with st.form("new_rule_form", clear_on_submit=True):
         c1, c2, c3 = st.columns([2, 3, 3])
-        with c1: new_vendor = st.text_input("Vendor (예: Apple)", placeholder="Vendor 키워드")
-        with c2: new_skr03  = st.text_input("SKR03 계정 (예: 4930 - Bürobedarf)", placeholder="SKR03")
-        with c3: new_skr04  = st.text_input("SKR04 계정 (예: 6815 - Bürobedarf)", placeholder="SKR04")
+        with c1: new_vendor = st.text_input("Vendor", placeholder="z.B. Apple")
+        with c2: new_skr03  = st.text_input("SKR03", placeholder="z.B. 4930")
+        with c3: new_skr04  = st.text_input("SKR04", placeholder="z.B. 6815")
         
-        submit_rule = st.form_submit_button("💾 Regel speichern (규칙 저장)")
+        submit_rule = st.form_submit_button("💾 Regel speichern")
         if submit_rule and new_vendor:
             st.session_state.custom_rules[new_vendor] = {"SKR03": new_skr03, "SKR04": new_skr04}
-            st.toast(f"✅ '{new_vendor}' 매핑 규칙이 저장되었습니다!", icon="💾")
-            
-    # 현재 등록된 규칙 테이블 보기
+            st.toast(f"💾 Regel für '{new_vendor}' erfolgreich gespeichert!")
+
+    # 등록된 규칙 리스트 및 개별 삭제 인터페이스
     if st.session_state.custom_rules:
-        rules_data = []
-        for v, codes in st.session_state.custom_rules.items():
-            rules_data.append({"Vendor": v, "SKR03": codes["SKR03"], "SKR04": codes["SKR04"]})
-        st.dataframe(pd.DataFrame(rules_data), use_container_width=True, height=180)
+        st.markdown("**Aktuelle Regeln:**")
+        for v in list(st.session_state.custom_rules.keys()):
+            r_col1, r_col2, r_col3, r_col4 = st.columns([2, 3, 3, 1])
+            with r_col1: st.text(v)
+            with r_col2: st.text(st.session_state.custom_rules[v]["SKR03"])
+            with r_col3: st.text(st.session_state.custom_rules[v]["SKR04"])
+            with r_col4: 
+                # 각 행별 고유 키를 제공하여 개별 규칙 즉시 삭제
+                if st.button("❌ Löschen", key=f"del_{v}", use_container_width=True):
+                    del st.session_state.custom_rules[v]
+                    st.rerun()
 
 st.markdown("---")
 
@@ -308,7 +312,6 @@ if uploaded_files:
                 beleg_nr, date_str, vendor, total, currency, _, mwst_type, raw_text = res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7]
                 was_called = res[8] if len(res) > 8 else False
 
-                # 업그레이드된 세션 동적 규칙 함수 호출
                 assigned_kategorie = get_assigned_account(vendor, selected_skr)
 
                 mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
