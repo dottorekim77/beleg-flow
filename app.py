@@ -57,7 +57,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v5.2 - Pure German Rules)")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v5.3 - Bugfix Column)")
 st.caption("Automatisierte Belegfassung mit SKR-Klassifizierung. Nur verifizierte Konten werden ausgefüllt, der Rest bleibt für den Steuerberater übersichtlich leer.")
 
 if "custom_rules" not in st.session_state:
@@ -252,12 +252,10 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
 # MAIN UI
 # ══════════════════════════════════════════════════════════════════════════════
 
-# 📝 순수 독일어 간결화 및 개별 규칙 삭제 기능 적용 영역
 with st.expander("📝 Buchungsregeln verwalten", expanded=False):
     st.caption("Verwalten Sie hier Ihre automatischen Zuweisungsregeln für bekannte Kreditoren.")
     
-    # 신규 규칙 추가 폼
-    with st.form("new_rule_form", clear_on_submit=True):
+    with St.form("new_rule_form", clear_on_submit=True):
         c1, c2, c3 = st.columns([2, 3, 3])
         with c1: new_vendor = st.text_input("Vendor", placeholder="z.B. Apple")
         with c2: new_skr03  = st.text_input("SKR03", placeholder="z.B. 4930")
@@ -268,7 +266,6 @@ with st.expander("📝 Buchungsregeln verwalten", expanded=False):
             st.session_state.custom_rules[new_vendor] = {"SKR03": new_skr03, "SKR04": new_skr04}
             st.toast(f"💾 Regel für '{new_vendor}' erfolgreich gespeichert!")
 
-    # 등록된 규칙 리스트 및 개별 삭제 인터페이스
     if st.session_state.custom_rules:
         st.markdown("**Aktuelle Regeln:**")
         for v in list(st.session_state.custom_rules.keys()):
@@ -277,14 +274,12 @@ with st.expander("📝 Buchungsregeln verwalten", expanded=False):
             with r_col2: st.text(st.session_state.custom_rules[v]["SKR03"])
             with r_col3: st.text(st.session_state.custom_rules[v]["SKR04"])
             with r_col4: 
-                # 각 행별 고유 키를 제공하여 개별 규칙 즉시 삭제
                 if st.button("❌ Löschen", key=f"del_{v}", use_container_width=True):
                     del st.session_state.custom_rules[v]
                     st.rerun()
 
 st.markdown("---")
 
-# 파일 업로더 및 기존 레이아웃 유지
 uploaded_files = st.file_uploader("📂 Digitale Belege hochladen (PDF, PNG, JPG, JPEG)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 
 col_cfg1, col_cfg2 = st.columns(2)
@@ -340,12 +335,12 @@ if uploaded_files:
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
-    # DATA EDITOR
+    # DATA EDITOR (placeholder가 안전하게 제거됨)
     st.data_editor(
         st.session_state.edited_receipts,
         use_container_width=True, num_rows="fixed", height=400, key="beleg_editor_key", on_change=on_table_edited,
         column_config={
-            f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium", placeholder="👉 Zur Prüfung durch Steuerberater (Leer)"),
+            f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium"),
             "Beleg-Soll (Orig.)":    st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True), 
             "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €"),
             "USt/Vorsteuer 19%":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
