@@ -45,19 +45,21 @@ KNOWN_VENDORS = {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STREAMLIT PAGE SETUP & CSS HACKS (사이드바 복구 및 링크 숨김)
+# STREAMLIT PAGE SETUP & CLEAN UI HACKS
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 
-# 사이드바는 살리고, 내비게이션 텍스트 링크 리스트만 숨기는 정밀 CSS
+# 사이드바 잔재와 불필요한 공백을 완전히 숨겨 넓은 메인 화면을 확보하는 CSS
 st.markdown("""
     <style>
         [data-testid="stSidebarNav"] {display: none !important;}
+        section[data-testid="stSidebar"] {display: none !important;}
+        .block-container {padding-top: 2rem !important; padding-bottom: 2rem !important;}
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v4.9 - Sidebar Fixed)")
-st.caption("Automatisierte Belegfassung mit SKR-Klassifizierung. Nur verifizierte Konten werden ausgefüllt, der Rest bleibt für den Steuerberater übersichtlich leer. Die Formatierung der Währungswerte im Dateneditor wurde vollständig korrigiert.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v5.0 - Standard Labels)")
+st.caption("Automatisierte Belegfassung mit SKR-Klassifizierung. Nur verifizierte Konten werden ausgefüllt, der Rest bleibt für den Steuerberater übersichtlich leer.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # API AUTHENTIFIZIERUNG
@@ -248,10 +250,10 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
 
 uploaded_files = st.file_uploader("📂 Digitale Belege hochladen (PDF, PNG, JPG, JPEG)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 
-# ⚙️ 상단 라디오 버튼 (SKR04 기본 활성화, 라벨은 아이콘만 깔끔하게 구성)
+# 📊 명확한 옵션 라벨로 전면 수정 (SKR04 기본 체크 index=1 유지)
 col_cfg1, col_cfg2 = st.columns(2)
-with col_cfg1: default_zahlart = st.radio("⚙️", options=ZAHLART_OPTIONS, index=0, horizontal=True)
-with col_cfg2: selected_skr = st.radio("⚙️ ", options=["SKR03", "SKR04"], index=1, horizontal=True)
+with col_cfg1: default_zahlart = st.radio("💳 Standard-Zahlweg (DATEV)", options=ZAHLART_OPTIONS, index=0, horizontal=True)
+with col_cfg2: selected_skr = st.radio("📋 Standardkontenrahmen (SKR)", options=["SKR03", "SKR04"], index=1, horizontal=True)
 
 if uploaded_files:
     batch_key = "".join(f.name for f in uploaded_files) + f"_{selected_skr}_{default_zahlart}"
