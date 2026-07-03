@@ -45,19 +45,18 @@ KNOWN_VENDORS = {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STREAMLIT PAGE SETUP & CSS HACKS
+# STREAMLIT PAGE SETUP & CSS HACKS (사이드바 복구 및 링크 숨김)
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 
-# CSS-Hack: Blendet die Standard-Sidebar-Navigation aus, falls vorhanden
+# 사이드바는 살리고, 내비게이션 텍스트 링크 리스트만 숨기는 정밀 CSS
 st.markdown("""
     <style>
         [data-testid="stSidebarNav"] {display: none !important;}
-        section[data-testid="stSidebar"] {display: none !important;}
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v4.8 - Pure German Edition)")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v4.9 - Sidebar Fixed)")
 st.caption("Automatisierte Belegfassung mit SKR-Klassifizierung. Nur verifizierte Konten werden ausgefüllt, der Rest bleibt für den Steuerberater übersichtlich leer. Die Formatierung der Währungswerte im Dateneditor wurde vollständig korrigiert.")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -249,7 +248,7 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
 
 uploaded_files = st.file_uploader("📂 Digitale Belege hochladen (PDF, PNG, JPG, JPEG)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 
-# 🛠️ [Fix] Nur reine ⚙️ Icons, SKR04 als Standard (index=1)
+# ⚙️ 상단 라디오 버튼 (SKR04 기본 활성화, 라벨은 아이콘만 깔끔하게 구성)
 col_cfg1, col_cfg2 = st.columns(2)
 with col_cfg1: default_zahlart = st.radio("⚙️", options=ZAHLART_OPTIONS, index=0, horizontal=True)
 with col_cfg2: selected_skr = st.radio("⚙️ ", options=["SKR03", "SKR04"], index=1, horizontal=True)
@@ -303,7 +302,7 @@ if uploaded_files:
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
-    # DATA EDITOR (100% German Text)
+    # DATA EDITOR (100% German)
     st.data_editor(
         st.session_state.edited_receipts,
         use_container_width=True, num_rows="fixed", height=400, key="beleg_editor_key", on_change=on_table_edited,
