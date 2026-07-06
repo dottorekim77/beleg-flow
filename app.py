@@ -45,9 +45,9 @@ INITIAL_VENDORS = {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# API AUTHENTIFIZIERUNG (가장 확실하게 직접 지정)
+# API AUTHENTIFIZIERUNG (인증 및 안전장치 강화)
 # ══════════════════════════════════════════════════════════════════════════════
-# 외부 파일 인식 오류를 방지하기 위해 여기에 키를 직접 대입합니다.
+# ⚠️ 주의: 아래 큰따옴표 안에 본인의 실제 Gemini API Key를 반드시 붙여넣으세요!
 API_KEY = "여기에_실제_Gemini_API_키를_넣으세요" 
 
 if not API_KEY or API_KEY == "AQ.Ab8RN6IC-RyeZOrWpKfHT913EIz81B5036YoPwqekH6Qr_0YQA":
@@ -55,7 +55,7 @@ if not API_KEY or API_KEY == "AQ.Ab8RN6IC-RyeZOrWpKfHT913EIz81B5036YoPwqekH6Qr_0
     if not API_KEY:
         API_KEY = st.text_input("🔑 Gemini API-Key eingeben", type="password", key="main_api_key_input")
         if not API_KEY:
-            st.info("ℹ️ 서비스를 이용하시려면 Gemini API Key를 입력하거나 코드의 API_KEY 변수에 직접 지정해 주세요.")
+            st.error("🚨 API Key가 유효하지 않거나 입력되지 않았습니다. 코드 내부의 API_KEY 변수에 직접 입력해 주세요.")
             st.stop()
 
 genai.configure(api_key=API_KEY)
@@ -73,8 +73,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.9 - Key Hardcoded)")
-st.caption("인증 오류 우회를 위해 스크립트 내부에 API 키를 직접 바인딩할 수 있도록 수정한 버전입니다.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v8.0 - 무한로딩 방지)")
+st.caption("API 호출 실패 시 무한 대기에 빠지지 않고 화면에 즉시 에러 원인을 노출하도록 개선된 버전입니다.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CACHE RESET & SESSION STATE
@@ -125,28 +125,25 @@ def build_datev_filename(date_str: str, vendor: str, brutto_eur: float, ausgang_
     return f"{base_name}.pdf"
 
 def ask_gemini_vision_direct(file_bytes: bytes, mime_type: str, skr_mode: str) -> tuple:
-    fallback = ("", datetime.now().strftime("%Y-%m-%d"), "Fehler/Timeout", 0.0, "EUR", "", "AUTO_19", "No OCR text")
+    """무한 대기를 방지하기 위해 예외 발생 시 에러 내용을 함께 반환합니다."""
+    fallback_date = datetime.now().strftime("%Y-%m-%d")
     
-    max_retries = 2
-    for attempt in range(max_retries):
-        try:
-            model = genai.GenerativeModel(GEMINI_MODEL)
-            prompt_text = get_gemini_prompt(skr_mode)
-            
-            response = model.generate_content(
-                [{"mime_type": mime_type, "data": file_bytes}, prompt_text],
-                request_options={"timeout": 10.0} 
-            )
-            
-            beleg_nr, d_str, ven, tot, cur, kat, m_type = _parse_gemini_response(response.text)
-            return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text
-            
-        except Exception:
-            if attempt == max_retries - 1:
-                return fallback
-            time.sleep(FREE_TIER_DELAY)
-            
-    return fallback
+    try:
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        prompt_text = get_gemini_prompt(skr_mode)
+        
+        response = model.generate_content(
+            [{"mime_type": mime_type, "data": file_bytes}, prompt_text],
+            request_options={"timeout": 15.0} # 타임아웃 명시적 지정
+        )
+        
+        beleg_nr, d_str, ven, tot, cur, kat, m_type = _parse_gemini_response(response.text)
+        return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text, None
+        
+    except Exception as e:
+        # 에러 정보를 화면단으로 토스하여 무한 대기를 끊음
+        error_msg = str(e)
+        return ("", fallback_date, "API Error", 0.0, "EUR", "", "AUTO_19", f"Error Detail: {error_msg}", error_msg)
 
 def get_assigned_account(vendor_name: str, skr_mode: str) -> str:
     v_upper = vendor_name.upper()
@@ -359,8 +356,14 @@ if uploaded_files:
                 ext        = uploaded_file.name.rsplit(".", 1)[-1].lower()
                 mime_type  = MIME_MAP.get(ext, "application/octet-stream")
 
-                res = ask_gemini_vision_direct(file_bytes, mime_type, selected_skr)
-                beleg_nr, date_str, vendor, total, currency, _, mwst_type, raw_text = res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7]
+                # 수정한 파싱 함수 호출 (마지막 항목에 에러 유무 확인)
+                beleg_nr, date_str, vendor, total, currency, _, mwst_type, raw_text, err = ask_gemini_vision_direct(file_bytes, mime_type, selected_skr)
+                
+                # 만약 백엔드 호출 도중 에러가 발견되면 상태창에 표시하고 진행 중단
+                if err is not None:
+                    status.update(label="❌ API Authentication or Quota Error Occurred!", state="error")
+                    st.error(f"⚠️ **Gemini API 호출에 실패했습니다.**\n\n**원인 코드:** `{err}`\n\n**해결법:** 코드 내부 46번째 줄의 API_KEY 문자열 값이 사용 가능한 정상적인 키인지 다시 한번 검증해 주세요.")
+                    st.stop()
 
                 assigned_kategorie = get_assigned_account(vendor, selected_skr)
                 mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
