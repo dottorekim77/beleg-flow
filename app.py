@@ -530,18 +530,36 @@ with tab3:
         edited_df = st.data_editor(
             df_m,
             use_container_width=True, num_rows="fixed", height=400, key="matching_editor_key", on_change=on_matching_table_edited,
-            column_config={
-                "SKR_Konto": st.column_config.TextColumn(label=f"📊 {selected_skr}", width="medium", placeholder="Pruefung durch Steuerberater"),  # 고정 문자열 키로 수정 완료 및 label 매핑 처리
-                "Konto 내역 금액": st.column_config.TextColumn("Konto 내역 금액", disabled=True),
-                "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%.2f EUR"),
-                "USt/Vorsteuer 19%": st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%.2f EUR"),
-                "Vorsteuer 7%": st.column_config.NumberColumn("Vorsteuer 7%", format="%.2f EUR"),
-                "Nettobetrag (Haben)": st.column_config.NumberColumn("Nettobetrag (Haben)", format="%.2f EUR"),
-                "Zahlweg (DATEV)": st.column_config.SelectboxColumn("Zahlweg (DATEV)", options=ZAHLART_OPTIONS),
-                "Steuerschlüssel": st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"]),
-                "Status": st.column_config.TextColumn("Status", disabled=True),
-                "_FileExt": None, "_RawBytes": None, "_OcrText": None, "Status_Flag": None
-            }
+            st.markdown("### 💡 실시간 전표 정정 테이블")
+        
+        # 1. 안전하게 딕셔너리를 먼저 생성
+        safe_config = {
+            "Konto 내역 금액": st.column_config.TextColumn("Konto 내역 금액", disabled=True),
+            "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%.2f EUR"),
+            "USt/Vorsteuer 19%": st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%.2f EUR"),
+            "Vorsteuer 7%": st.column_config.NumberColumn("Vorsteuer 7%", format="%.2f EUR"),
+            "Nettobetrag (Haben)": st.column_config.NumberColumn("Nettobetrag (Haben)", format="%.2f EUR"),
+            "Zahlweg (DATEV)": st.column_config.SelectboxColumn("Zahlweg (DATEV)", options=ZAHLART_OPTIONS),
+            "Steuerschlüssel": st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"]),
+            "Status": st.column_config.TextColumn("Status", disabled=True),
+            "_FileExt": None, "_RawBytes": None, "_OcrText": None, "Status_Flag": None
+        }
+        
+        # 2. 문제가 되는 SKR_Konto 컬럼 설정을 안전하게 문자열 포맷팅 없이 단순 할당
+        safe_config["SKR_Konto"] = st.column_config.TextColumn(
+            label=f"SKR_Konto ({selected_skr})", 
+            width="medium"
+        )
+
+        # 3. data_editor에 주입
+        edited_df = st.data_editor(
+            df_m,
+            use_container_width=True, 
+            num_rows="fixed", 
+            height=400, 
+            key="matching_editor_key", 
+            on_change=on_matching_table_edited,
+            column_config=safe_config  # 위에서 만든 safe_config 적용
         )
         
         st.markdown("---")
