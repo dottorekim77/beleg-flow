@@ -44,25 +44,6 @@ INITIAL_VENDORS = {
     "Ionq":       {"SKR03": "4980 - Betriebsbedarf", "SKR04": "6300 - Sonstige Aufwendungen"},
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# API AUTHENTIFIZIERUNG (인증 및 안전장치 강화)
-# ══════════════════════════════════════════════════════════════════════════════
-# ⚠️ 주의: 아래 큰따옴표 안에 본인의 실제 Gemini API Key를 반드시 붙여넣으세요!
-API_KEY = "여기에_실제_Gemini_API_키를_넣으세요" 
-
-if not API_KEY or API_KEY == "AQ.Ab8RN6IC-RyeZOrWpKfHT913EIz81B5036YoPwqekH6Qr_0YQA":
-    API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-    if not API_KEY:
-        API_KEY = st.text_input("🔑 Gemini API-Key eingeben", type="password", key="main_api_key_input")
-        if not API_KEY:
-            st.error("🚨 API Key가 유효하지 않거나 입력되지 않았습니다. 코드 내부의 API_KEY 변수에 직접 입력해 주세요.")
-            st.stop()
-
-genai.configure(api_key=API_KEY)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# APP INITIALIZATION & PAGE CONFIG
-# ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 
 st.markdown("""
@@ -73,12 +54,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v8.0 - 무한로딩 방지)")
-st.caption("API 호출 실패 시 무한 대기에 빠지지 않고 화면에 즉시 에러 원인을 노출하도록 개선된 버전입니다.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.5 - Thousand Separator Mode)")
+st.caption("파일명의 금액 파트에 천단위 구분 쉼표(,)를 추가한 최적화 버전입니다.")
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CACHE RESET & SESSION STATE
-# ══════════════════════════════════════════════════════════════════════════════
 if st.button("🔄 시스템 캐시 및 메모리 강제 초기화 (먹통 해결용)"):
     st.cache_data.clear()
     for key in list(st.session_state.keys()):
@@ -95,55 +73,64 @@ if "current_page" not in st.session_state:
     st.session_state.current_page = 0
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HELPER: GERMAN NUMBER FORMATTER
+# API AUTHENTIFIZIERUNG
 # ══════════════════════════════════════════════════════════════════════════════
-def to_german_amount_str(val: float) -> str:
-    try:
-        us_style = f"{float(val):,.2f}"
-        placed = us_style.replace(",", "PLACEHOLDER")
-        placed = placed.replace(".", ",")
-        german_style = placed.replace("PLACEHOLDER", ".")
-        return german_style
-    except (ValueError, TypeError):
-        return "0,00"
+API_KEY: str = st.secrets.get("GEMINI_API_KEY", "")
+if not API_KEY:
+    API_KEY = st.text_input("🔑 Gemini API-Key eingeben", type="password")
+    if API_KEY: genai.configure(api_key=API_KEY)
+else:
+    genai.configure(api_key=API_KEY)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BACKEND ENGINE & FILENAME BUILDER
+# BACKEND ENGINE & FILENAME BUILDER (천단위 쉼표 포맷팅 반영)
 # ══════════════════════════════════════════════════════════════════════════════
+
 def sanitize_filename(text: str) -> str: 
     return _ILLEGAL_CHARS.sub("", text).strip()
 
 def build_datev_filename(date_str: str, vendor: str, brutto_eur: float, ausgang_inv: str) -> str:
+    """
+    규격: 날짜_판매점_천단위쉼표가격EUR_INV-우리회사인보이스번호.pdf
+    예시: 20260706_Amazon_1,250.45EUR_INV-1024.pdf
+    """
     d_clean = date_str.replace('-', '')
     v_clean = sanitize_filename(vendor).replace(" ", "")[:12]
-    p_part  = f"{to_german_amount_str(brutto_eur)}EUR"
+    
+    # {:,.2f} 포맷팅을 사용하여 천단위 쉼표와 소수점 둘째 자리 강제 출력
+    p_part  = f"{brutto_eur:,.2f}EUR"
+    
     base_name = f"{d_clean}_{v_clean}_{p_part}"
     
     if ausgang_inv and str(ausgang_inv).strip() and str(ausgang_inv).lower() != "none":
         inv_part = f"_INV-{sanitize_filename(str(ausgang_inv))}"
         return f"{base_name}{inv_part}.pdf"
+    
     return f"{base_name}.pdf"
 
 def ask_gemini_vision_direct(file_bytes: bytes, mime_type: str, skr_mode: str) -> tuple:
-    """무한 대기를 방지하기 위해 예외 발생 시 에러 내용을 함께 반환합니다."""
-    fallback_date = datetime.now().strftime("%Y-%m-%d")
+    fallback = ("", datetime.now().strftime("%Y-%m-%d"), "Fehler/Timeout", 0.0, "EUR", "", "AUTO_19", "No OCR text")
     
-    try:
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        prompt_text = get_gemini_prompt(skr_mode)
-        
-        response = model.generate_content(
-            [{"mime_type": mime_type, "data": file_bytes}, prompt_text],
-            request_options={"timeout": 15.0} # 타임아웃 명시적 지정
-        )
-        
-        beleg_nr, d_str, ven, tot, cur, kat, m_type = _parse_gemini_response(response.text)
-        return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text, None
-        
-    except Exception as e:
-        # 에러 정보를 화면단으로 토스하여 무한 대기를 끊음
-        error_msg = str(e)
-        return ("", fallback_date, "API Error", 0.0, "EUR", "", "AUTO_19", f"Error Detail: {error_msg}", error_msg)
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            model = genai.GenerativeModel(GEMINI_MODEL)
+            prompt_text = get_gemini_prompt(skr_mode)
+            
+            response = model.generate_content(
+                [{"mime_type": mime_type, "data": file_bytes}, prompt_text],
+                request_options={"timeout": 10.0} 
+            )
+            
+            beleg_nr, d_str, ven, tot, cur, kat, m_type = _parse_gemini_response(response.text)
+            return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text
+            
+        except Exception:
+            if attempt == max_retries - 1:
+                return fallback
+            time.sleep(FREE_TIER_DELAY)
+            
+    return fallback
 
 def get_assigned_account(vendor_name: str, skr_mode: str) -> str:
     v_upper = vendor_name.upper()
@@ -240,6 +227,7 @@ def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple[float, flo
 # ══════════════════════════════════════════════════════════════════════════════
 # REKALKULATION & EXPORT
 # ══════════════════════════════════════════════════════════════════════════════
+
 def on_table_edited() -> None:
     edit_state  = st.session_state.get("beleg_editor_key", {})
     edited_rows = edit_state.get("edited_rows", {})
@@ -264,6 +252,7 @@ def on_table_edited() -> None:
         df.at[global_idx, "Vorsteuer 7%"]  = mwst_7
         df.at[global_idx, "Nettobetrag (Haben)"]    = netto
         
+        # 실시간 변경 감지 및 신규 파일명 규칙 적용
         df.at[global_idx, "Zukünftiger DATEV-Dateiname"] = build_datev_filename(
             str(df.at[global_idx, "Rechnungsdatum"]), 
             str(df.at[global_idx, "Verkäufer"]), 
@@ -286,7 +275,7 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
         for row in ws.iter_rows(min_row=2):
             for col_idx, cell in enumerate(row, start=1):
                 cell.border = border_style
-                if col_idx in (6, 7, 8, 9): cell.number_format = '#.##0,00" €"'
+                if col_idx in (6, 7, 8, 9): cell.number_format = '#,##0.00" €"'
                 elif col_idx in (1, 5): cell.alignment = Alignment(horizontal="right")
 
         for col in ws.columns:
@@ -302,6 +291,7 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN UI
 # ══════════════════════════════════════════════════════════════════════════════
+
 with st.expander("📝 Buchungsregeln verwalten", expanded=False):
     st.caption("Verwalten Sie hier Ihre automatischen Zuweisungsregeln für bekannte Kreditoren.")
     
@@ -337,6 +327,10 @@ with col_cfg1: default_zahlart = st.radio("💳 Standard-Zahlweg (DATEV)", optio
 with col_cfg2: selected_skr = st.radio("📋 Standardkontenrahmen (SKR)", options=["SKR03", "SKR04"], index=1, horizontal=True)
 
 if uploaded_files:
+    if not API_KEY:
+        st.warning("⚠️ Bitte geben Sie zuerst den Gemini API-Key ein, um die Belege zu analysieren.")
+        st.stop()
+
     batch_key = "".join(f.name for f in uploaded_files) + f"_{selected_skr}_{default_zahlart}"
     if st.session_state.get("last_batch_key") != batch_key:
         st.session_state.last_batch_key = batch_key
@@ -356,19 +350,14 @@ if uploaded_files:
                 ext        = uploaded_file.name.rsplit(".", 1)[-1].lower()
                 mime_type  = MIME_MAP.get(ext, "application/octet-stream")
 
-                # 수정한 파싱 함수 호출 (마지막 항목에 에러 유무 확인)
-                beleg_nr, date_str, vendor, total, currency, _, mwst_type, raw_text, err = ask_gemini_vision_direct(file_bytes, mime_type, selected_skr)
-                
-                # 만약 백엔드 호출 도중 에러가 발견되면 상태창에 표시하고 진행 중단
-                if err is not None:
-                    status.update(label="❌ API Authentication or Quota Error Occurred!", state="error")
-                    st.error(f"⚠️ **Gemini API 호출에 실패했습니다.**\n\n**원인 코드:** `{err}`\n\n**해결법:** 코드 내부 46번째 줄의 API_KEY 문자열 값이 사용 가능한 정상적인 키인지 다시 한번 검증해 주세요.")
-                    st.stop()
+                res = ask_gemini_vision_direct(file_bytes, mime_type, selected_skr)
+                beleg_nr, date_str, vendor, total, currency, _, mwst_type, raw_text = res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7]
 
                 assigned_kategorie = get_assigned_account(vendor, selected_skr)
                 mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
                 is_cc_initial = (default_zahlart == "Kreditkarte")
 
+                # 초기 로드 시 콤마 포함 파일명 기본 생성
                 generated_filename = build_datev_filename(date_str, vendor, total, "")
 
                 rows.append({
@@ -376,7 +365,7 @@ if uploaded_files:
                     "🔗 Ausgangs-INV":  "",                         
                     "Verkäufer":        vendor,                     
                     "Beleg_Nr":        beleg_nr,                   
-                    "Beleg-Soll (Orig.)": f"{to_german_amount_str(total)} $" if currency == "USD" else f"{to_german_amount_str(total)} €", 
+                    "Beleg-Soll (Orig.)": f"{total:,.2f} $" if currency == "USD" else f"{total:,.2f} €", 
                     "Bruttobetrag (EUR)": total,                    
                     "Is_Kreditkarte":   is_cc_initial,              
                     "Zahlweg (DATEV)":          default_zahlart,    
@@ -427,13 +416,13 @@ if uploaded_files:
                 "Verkäufer":        st.column_config.TextColumn("Verkäufer", width="medium"),
                 "Beleg_Nr":        st.column_config.TextColumn("Beleg_Nr (구매영수증번호)", width="medium"),
                 "Beleg-Soll (Orig.)":    st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True, width="small"), 
-                "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%.2f €", width="small"),
+                "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €", width="small"),
                 "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳 CC"),
                 "Zahlweg (DATEV)":         st.column_config.TextColumn("Zahlweg (DATEV)", disabled=True, width="small"),
                 f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium"),
-                "USt/Vorsteuer 19%":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%.2f €"),
-                "Vorsteuer 7%":   st.column_config.NumberColumn("Vorsteuer 7%", format="%.2f €"),
-                "Nettobetrag (Haben)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%.2f €"),
+                "USt/Vorsteuer 19%":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
+                "Vorsteuer 7%":   st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
+                "Nettobetrag (Haben)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
                 "Steuerschlüssel":       st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
                 "Zukünftiger DATEV-Dateiname": st.column_config.TextColumn("Zukünftiger DATEV-Dateiname", width="max"),
                 "_FileExt": None, "_RawBytes": None, "_OcrText": None
