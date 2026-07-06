@@ -20,7 +20,7 @@ GEMINI_MODEL    = "gemini-3.1-flash-lite"
 FREE_TIER_DELAY = 4.2                        
 MWST_19_FACTOR  = 19 / 119
 MWST_7_FACTOR   = 7 / 107
-ITEMS_PER_PAGE  = 10  # 💡 한 페이지에 보여줄 행 수 (원하는 대로 조절 가능)
+ITEMS_PER_PAGE  = 10  
 
 MIME_MAP = {
     "pdf":  "application/pdf",
@@ -57,8 +57,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v5.9 - API Guard & Pagination)")
-st.caption("Automatisierte Belegfassung mit SKR-Klassifizierung. Das System teilt große Datenmengen in Seiten auf, um Scroll-Sprünge und unendlich lange Seiten zu verhindern.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v6.0 - Anti-Freeze Engine)")
+st.caption("Automatisierte Belegfassung mit optimierter Ratenbegrenzung. Verhindert das Einfrieren bei großen Dateimengen.")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = INITIAL_VENDORS.copy()
@@ -298,7 +298,6 @@ with col_cfg1: default_zahlart = st.radio("💳 Standard-Zahlweg (DATEV)", optio
 with col_cfg2: selected_skr = st.radio("📋 Standardkontenrahmen (SKR)", options=["SKR03", "SKR04"], index=1, horizontal=True)
 
 if uploaded_files:
-    # 💡 [보안 가드 추가]: API_KEY 검증 전 하단 프로세스 차단으로 NameError 해결
     if not API_KEY:
         st.warning("⚠️ Bitte geben Sie zuerst den Gemini API-Key ein, um die Belege zu analysieren.")
         st.stop()
@@ -312,42 +311,51 @@ if uploaded_files:
     if st.session_state.edited_receipts is None:
         rows = []
         total_files = len(uploaded_files)
-        progress_bar = st.progress(0)
+        
+        # 💡 UI 고정 플레이스홀더를 사용하여 무한 프리징 방지
+        progress_placeholder = st.empty()
+        
+        for idx, uploaded_file in enumerate(uploaded_files):
+            # 루프 돌 때마다 플레이스홀더 내부를 갱신하여 렌더링 충돌을 막음
+            with progress_placeholder.container():
+                st.progress(int((idx) / total_files * 100))
+                st.spinner(f"🔮 Analysiere Dokument {idx+1}/{total_files}: {uploaded_file.name}...")
 
-        with st.spinner("🔮 Analysiere Dokumente via Kognitiver AI-Engine..."):
-            for idx, uploaded_file in enumerate(uploaded_files):
-                file_bytes = uploaded_file.read()
-                ext        = uploaded_file.name.rsplit(".", 1)[-1].lower()
-                mime_type  = MIME_MAP.get(ext, "application/octet-stream")
+            file_bytes = uploaded_file.read()
+            ext        = uploaded_file.name.rsplit(".", 1)[-1].lower()
+            mime_type  = MIME_MAP.get(ext, "application/octet-stream")
 
-                res = ask_gemini_vision_cached(file_bytes, mime_type, selected_skr, API_KEY)
-                beleg_nr, date_str, vendor, total, currency, _, mwst_type, raw_text = res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7]
-                was_called = res[8] if len(res) > 8 else False
+            res = ask_gemini_vision_cached(file_bytes, mime_type, selected_skr, API_KEY)
+            beleg_nr, date_str, vendor, total, currency, _, mwst_type, raw_text = res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7]
+            was_called = res[8] if len(res) > 8 else False
 
-                assigned_kategorie = get_assigned_account(vendor, selected_skr)
-                mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
-                is_cc_initial = (default_zahlart == "Kreditkarte")
+            assigned_kategorie = get_assigned_account(vendor, selected_skr)
+            mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
+            is_cc_initial = (default_zahlart == "Kreditkarte")
 
-                rows.append({
-                    "Rechnungsdatum":  date_str,                  
-                    "🔗 Ausgangs-INV":  "",                         
-                    "Verkäufer":        vendor,                     
-                    "Beleg_Nr":        beleg_nr,                   
-                    "Beleg-Soll (Orig.)": f"{total:,.2f} $" if currency == "USD" else f"{total:,.2f} €", 
-                    "Bruttobetrag (EUR)": total,                    
-                    "Is_Kreditkarte":   is_cc_initial,              
-                    "Zahlweg (DATEV)":          default_zahlart,    
-                    f"{selected_skr}": assigned_kategorie, 
-                    "USt/Vorsteuer 19%":  mwst_19,
-                    "Vorsteuer 7%":   mwst_7,
-                    "Nettobetrag (Haben)":      netto,
-                    "Steuerschlüssel":        mwst_type,
-                    "Zukünftiger DATEV-Dateiname": build_datev_filename(date_str, "", vendor, beleg_nr, total, default_zahlart),
-                    "_FileExt": ext, "_RawBytes": file_bytes, "_OcrText": raw_text
-                })
-                progress_bar.progress(int((idx + 1) / total_files * 100))
-                if was_called and total_files > 1 and idx < total_files - 1: time.sleep(FREE_TIER_DELAY)
+            rows.append({
+                "Rechnungsdatum":  date_str,                  
+                "🔗 Ausgangs-INV":  "",                         
+                "Verkäufer":        vendor,                     
+                "Beleg_Nr":        beleg_nr,                   
+                "Beleg-Soll (Orig.)": f"{total:,.2f} $" if currency == "USD" else f"{total:,.2f} €", 
+                "Bruttobetrag (EUR)": total,                    
+                "Is_Kreditkarte":   is_cc_initial,              
+                "Zahlweg (DATEV)":          default_zahlart,    
+                f"{selected_skr}": assigned_kategorie, 
+                "USt/Vorsteuer 19%":  mwst_19,
+                "Vorsteuer 7%":   mwst_7,
+                "Nettobetrag (Haben)":      netto,
+                "Steuerschlüssel":        mwst_type,
+                "Zukünftiger DATEV-Dateiname": build_datev_filename(date_str, "", vendor, beleg_nr, total, default_zahlart),
+                "_FileExt": ext, "_RawBytes": file_bytes, "_OcrText": raw_text
+            })
+            
+            # 💡 대기 시간을 파일 분석 직후가 아닌 루프 마지막 단계로 재배치하여 안정성 확보
+            if was_called and total_files > 1 and idx < total_files - 1: 
+                time.sleep(FREE_TIER_DELAY)
 
+        progress_placeholder.empty() # 분석 완료 후 로딩 바 청소
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
