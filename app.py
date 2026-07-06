@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 # ==========================================
-# [중요] fpdf2 의존성 검사 및 안전한 자동 폰트 세팅
+# fpdf2 의존성 검사 및 안전한 자동 폰트 세팅
 # ==========================================
 try:
     from fpdf import FPDF
@@ -43,7 +43,7 @@ class BelegFlowPDF(FPDF):
 
 st.set_page_config(page_title="Beleg-Flow (영수증-계좌 통합 파서)", layout="wide")
 
-# Session State 초기화 (앱을 새로고침해도 설정 유지)[cite: 1]
+# Session State 초기화 (앱을 새로고침해도 설정 유지)
 if "config" not in st.session_state:
     st.session_state.config = {
         "kontenrahmen": "SKR 04",
@@ -55,72 +55,72 @@ if "config" not in st.session_state:
 if "processed_data" not in st.session_state:
     st.session_state.processed_data = None
 
-st.title("🧾 Beleg-Flow: 영수증 & Kontoauszug 자동 매칭 시스템")[cite: 1]
-st.caption("기본 설정 기반으로 여러 개의 계좌 내역(CSV)과 영수증을 분석하여 세무사용 최적화 자료를 생성합니다.")[cite: 1]
+st.title("🧾 Beleg-Flow: 영수증 & Kontoauszug 자동 매칭 시스템")
+st.caption("기본 설정 기반으로 여러 개의 계좌 내역(CSV)과 영수증을 분석하여 세무사용 최적화 자료를 생성합니다.")
 
-# 탭 구성[cite: 1]
-tab1, tab2, tab3 = st.tabs(["⚙️ 1. 기본 설정창", "📁 2. 데이터 업로드 & 매칭", "📊 3. 최종 검토 및 내보내기"])[cite: 1]
+# 탭 구성
+tab1, tab2, tab3 = st.tabs(["⚙️ 1. 기본 설정창", "📁 2. 데이터 업로드 & 매칭", "📊 3. 최종 검토 및 내보내기"])
 
 # ==========================================
-# TAB 1: 기본 설정창[cite: 1]
+# TAB 1: 기본 설정창
 # ==========================================
 with tab1:
-    st.header("⚙️ 애플리케이션 기본 설정")[cite: 1]
-    st.write("매번 반복 지정하는 회계 기준과 고정 지출 규칙을 미리 정의합니다.")[cite: 1]
+    st.header("⚙️ 애플리케이션 기본 설정")
+    st.write("매번 반복 지정하는 회계 기준과 고정 지출 규칙을 미리 정의합니다.")
     
-    col1, col2 = st.columns(2)[cite: 1]
+    col1, col2 = st.columns(2)
     with col1:
         kontenrahmen = st.radio("회계 기준 선택 (Kontenrahmen)", ["SKR 03", "SKR 04"], 
-                                index=0 if st.session_state.config["kontenrahmen"] == "SKR 03" else 1)[cite: 1]
+                                index=0 if st.session_state.config["kontenrahmen"] == "SKR 03" else 1)
         default_zahlungsart = st.selectbox("기본 결제 수단 (Default Zahlungsart)", 
                                            ["Bankeinzug", "Überweisung", "Kreditkarte", "Bar", "PayPal"],
-                                           index=["Bankeinzug", "Überweisung", "Kreditkarte", "Bar", "PayPal"].index(st.session_state.config["default_zahlungsart"]))[cite: 1]
+                                           index=["Bankeinzug", "Überweisung", "Kreditkarte", "Bar", "PayPal"].index(st.session_state.config["default_zahlungsart"]))
         
         fav_codes = st.text_area("자주 등장하는 SKR 코드 즐겨찾기 (한 줄에 하나씩)", 
-                                 value=st.session_state.config["fav_codes"], height=120)[cite: 1]
+                                 value=st.session_state.config["fav_codes"], height=120)
     
     with col2:
         fixed_expenses = st.text_area("고정 지출 자동 매핑 규칙 (포맷 -> 키워드:SKR코드:설명)", 
                                       value=st.session_state.config["fixed_expenses"], height=220,
-                                      help="계좌 내역에 해당 키워드가 포함되어 있으면 영수증 파일이 없어도 자동으로 고정지출로 승인하고 코드를 부여합니다.")[cite: 1]
+                                      help="계좌 내역에 해당 키워드가 포함되어 있으면 영수증 파일이 없어도 자동으로 고정지출로 승인하고 코드를 부여합니다.")
         
-    if st.button("💾 설정 저장하기", type="primary"):[cite: 1]
-        st.session_state.config["kontenrahmen"] = kontenrahmen[cite: 1]
-        st.session_state.config["default_zahlungsart"] = default_zahlungsart[cite: 1]
-        st.session_state.config["fav_codes"] = fav_codes[cite: 1]
-        st.session_state.config["fixed_expenses"] = fixed_expenses[cite: 1]
-        st.success("기본 설정이 성공적으로 저장되었습니다!")[cite: 1]
+    if st.button("💾 설정 저장하기", type="primary"):
+        st.session_state.config["kontenrahmen"] = kontenrahmen
+        st.session_state.config["default_zahlungsart"] = default_zahlungsart
+        st.session_state.config["fav_codes"] = fav_codes
+        st.session_state.config["fixed_expenses"] = fixed_expenses
+        st.success("기본 설정이 성공적으로 저장되었습니다!")
 
-# 설정을 반영한 리스트 가공[cite: 1]
-fav_codes_list = [line.strip() for line in st.session_state.config["fav_codes"].split("\n") if line.strip()][cite: 1]
-fixed_rules = [][cite: 1]
-for line in st.session_state.config["fixed_expenses"].split("\n"):[cite: 1]
-    if ":" in line:[cite: 1]
-        parts = line.split(":")[cite: 1]
-        if len(parts) == 3:[cite: 1]
-            fixed_rules.append({"keyword": parts[0].strip(), "code": parts[1].strip(), "label": parts[2].strip()})[cite: 1]
+# 설정을 반영한 리스트 가공
+fav_codes_list = [line.strip() for line in st.session_state.config["fav_codes"].split("\n") if line.strip()]
+fixed_rules = []
+for line in st.session_state.config["fixed_expenses"].split("\n"):
+    if ":" in line:
+        parts = line.split(":")
+        if len(parts) == 3:
+            fixed_rules.append({"keyword": parts[0].strip(), "code": parts[1].strip(), "label": parts[2].strip()})
 
 # ==========================================
-# TAB 2: 데이터 업로드 & 매칭[cite: 1]
+# TAB 2: 데이터 업로드 & 매칭
 # ==========================================
 with tab2:
-    st.header("📁 데이터 소스 업로드")[cite: 1]
+    st.header("📁 데이터 소스 업로드")
     
-    c1, c2 = st.columns(2)[cite: 1]
+    c1, c2 = st.columns(2)
     with c1:
-        st.subheader("1) Kontoauszug 업로드 (CSV)")[cite: 1]
+        st.subheader("1) Kontoauszug 업로드 (CSV)")
         uploaded_bank_files = st.file_uploader("은행/카드사에서 다운로드한 CSV 파일들을 선택하세요 (다중 선택 가능)", 
-                                               type=["csv"], accept_multiple_files=True)[cite: 1]
+                                               type=["csv"], accept_multiple_files=True)
         
     with c2:
-        st.subheader("2) 영수증 파일 업로드 (PDF/Images)")[cite: 1]
+        st.subheader("2) 영수증 파일 업로드 (PDF/Images)")
         uploaded_receipt_files = st.file_uploader("정리할 영수증 파일들을 선택하세요 (다중 선택 가능)", 
-                                                  type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)[cite: 1]
+                                                  type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
         
-    st.markdown("---")[cite: 1]
+    st.markdown("---")
     
-    if st.button("🚀 영수증-계좌 자동 매칭 시작", type="primary"):[cite: 1]
-        with st.spinner("AI 영수증 분석 및 계좌 내역 교차 대조 중..."):[cite: 1]
+    if st.button("🚀 영수증-계좌 자동 매칭 시작", type="primary"):
+        with st.spinner("AI 영수증 분석 및 계좌 내역 교차 대조 중..."):
             
             mock_bank = [
                 {"datum": "2026-06-15", "amount": -45.90, "vendor": "Amazon.de", "info": "Bestellung 302-11"},
@@ -128,33 +128,33 @@ with tab2:
                 {"datum": "2026-06-02", "amount": -34.99, "vendor": "Vodafone GmbH", "info": "Dauerauftrag Rechn."},
                 {"datum": "2026-06-05", "amount": -850.00, "vendor": "Immobilien Krefeld", "info": "Miete Juni"},
                 {"datum": "2026-06-20", "amount": -89.00, "vendor": "Adobe Systems", "info": "Creative Cloud"},
-            ][cite: 1]
+            ]
             
             mock_receipts = [
                 {"filename": "rechnung_amzn.pdf", "datum": "2026-06-15", "brutto": 45.90, "netto": 38.57, "mwst": "19%", "vendor": "Amazon", "rechnungs_nr": "INV-AMZ-992"},
                 {"filename": "aral_bill.jpg", "datum": "2026-06-16", "brutto": 120.00, "netto": 100.84, "mwst": "19%", "vendor": "Aral", "rechnungs_nr": "ARAL-8821"},
                 {"filename": "taxi_krefeld.pdf", "datum": "2026-06-18", "brutto": 15.00, "netto": 14.02, "mwst": "7%", "vendor": "Taxi-Krefeld", "rechnungs_nr": "TX-551"}
-            ][cite: 1]
+            ]
             
-            receipt_pool = [][cite: 1]
-            if uploaded_receipt_files:[cite: 1]
-                for i, f in enumerate(uploaded_receipt_files):[cite: 1]
-                    if i < len(mock_receipts):[cite: 1]
-                        r = mock_receipts[i].copy()[cite: 1]
-                        r["filename"] = f.name[cite: 1]
-                        receipt_pool.append(r)[cite: 1]
-                    else:[cite: 1]
+            receipt_pool = []
+            if uploaded_receipt_files:
+                for i, f in enumerate(uploaded_receipt_files):
+                    if i < len(mock_receipts):
+                        r = mock_receipts[i].copy()
+                        r["filename"] = f.name
+                        receipt_pool.append(r)
+                    else:
                         receipt_pool.append({
                             "filename": f.name, "datum": "2026-06-25", "brutto": 25.00, "netto": 21.01, "mwst": "19%", "vendor": "Sonstige", "rechnungs_nr": f"INV-{i}"
-                        })[cite: 1]
+                        })
             else:
-                receipt_pool = mock_receipts[cite: 1]
+                receipt_pool = mock_receipts
             
-            final_rows = [][cite: 1]
-            beleg_counter = 1[cite: 1]
-            matched_receipt_indices = set()[cite: 1]
+            final_rows = []
+            beleg_counter = 1
+            matched_receipt_indices = set()
             
-            for b in mock_bank:[cite: 1]
+            for b in mock_bank:
                 row = {
                     "beleg_nr": "",
                     "buchungsdatum": b["datum"],
@@ -168,45 +168,45 @@ with tab2:
                     "mwst": "-",
                     "verknüpfter_beleg": "-",
                     "status": "❌ 증빙 누락"
-                }[cite: 1]
+                }
                 
-                is_fixed = False[cite: 1]
-                for rule in fixed_rules:[cite: 1]
-                    if rule["keyword"].lower() in b["vendor"].lower() or rule["keyword"].lower() in b["info"].lower():[cite: 1]
-                        row["skr_code"] = f"{rule['code']} ({rule['label']})"[cite: 1]
-                        row["status"] = "🔄 고정 지출 (Vertrag)"[cite: 1]
-                        row["zahlungsart"] = "Bankeinzug"[cite: 1]
-                        is_fixed = True[cite: 1]
-                        break[cite: 1]
+                is_fixed = False
+                for rule in fixed_rules:
+                    if rule["keyword"].lower() in b["vendor"].lower() or rule["keyword"].lower() in b["info"].lower():
+                        row["skr_code"] = f"{rule['code']} ({rule['label']})"
+                        row["status"] = "🔄 고정 지출 (Vertrag)"
+                        row["zahlungsart"] = "Bankeinzug"
+                        is_fixed = True
+                        break
                         
-                if not is_fixed:[cite: 1]
-                    for idx, r in enumerate(receipt_pool):[cite: 1]
-                        if idx in matched_receipt_indices:[cite: 1]
-                            continue[cite: 1]
+                if not is_fixed:
+                    for idx, r in enumerate(receipt_pool):
+                        if idx in matched_receipt_indices:
+                            continue
                         
-                        b_date = datetime.strptime(b["datum"], "%Y-%m-%d")[cite: 1]
-                        r_date = datetime.strptime(r["datum"], "%Y-%m-%d")[cite: 1]
+                        b_date = datetime.strptime(b["datum"], "%Y-%m-%d")
+                        r_date = datetime.strptime(r["datum"], "%Y-%m-%d")
                         
-                        if abs(abs(b["amount"]) - r["brutto"]) < 0.01 and abs((b_date - r_date).days) <= 3:[cite: 1]
-                            b_id = f"RE-{beleg_counter:03d}"[cite: 1]
-                            beleg_counter += 1[cite: 1]
+                        if abs(abs(b["amount"]) - r["brutto"]) < 0.01 and abs((b_date - r_date).days) <= 3:
+                            b_id = f"RE-{beleg_counter:03d}"
+                            beleg_counter += 1
                             
-                            row["beleg_nr"] = b_id[cite: 1]
-                            row["zahlungsart"] = "Kreditkarte" if "kredit" in b["vendor"].lower() or "amex" in b["vendor"].lower() else "Bankeinzug"[cite: 1]
-                            row["rechnungs_nr"] = r["rechnungs_nr"][cite: 1]
-                            row["netto"] = f"{r['netto']:.2f} €"[cite: 1]
-                            row["mwst"] = r["mwst"][cite: 1]
-                            row["status"] = "✅ 매칭 완료"[cite: 1]
-                            row["verknüpfter_beleg"] = f"{b_id}_{r['datum'].replace('-', '')}_{r['vendor']}_{r['brutto']:.2f}.pdf"[cite: 1]
-                            matched_receipt_indices.add(idx)[cite: 1]
-                            break[cite: 1]
+                            row["beleg_nr"] = b_id
+                            row["zahlungsart"] = "Kreditkarte" if "kredit" in b["vendor"].lower() or "amex" in b["vendor"].lower() else "Bankeinzug"
+                            row["rechnungs_nr"] = r["rechnungs_nr"]
+                            row["netto"] = f"{r['netto']:.2f} €"
+                            row["mwst"] = r["mwst"]
+                            row["status"] = "✅ 매칭 완료"
+                            row["verknüpfter_beleg"] = f"{b_id}_{r['datum'].replace('-', '')}_{r['vendor']}_{r['brutto']:.2f}.pdf"
+                            matched_receipt_indices.add(idx)
+                            break
                             
-                final_rows.append(row)[cite: 1]
+                final_rows.append(row)
                 
-            for idx, r in enumerate(receipt_pool):[cite: 1]
-                if idx not in matched_receipt_indices:[cite: 1]
-                    b_id = f"RE-{beleg_counter:03d}"[cite: 1]
-                    beleg_counter += 1[cite: 1]
+            for idx, r in enumerate(receipt_pool):
+                if idx not in matched_receipt_indices:
+                    b_id = f"RE-{beleg_counter:03d}"
+                    beleg_counter += 1
                     
                     final_rows.append({
                         "beleg_nr": b_id,
@@ -221,22 +221,22 @@ with tab2:
                         "mwst": r["mwst"],
                         "verknüpfter_beleg": f"{b_id}_{r['datum'].replace('-', '')}_{r['vendor']}_{r['brutto']:.2f}.pdf",
                         "status": "⚠️ 영수증만 존재"
-                    })[cite: 1]
+                    })
                     
-            st.session_state.processed_data = pd.DataFrame(final_rows)[cite: 1]
-            st.success("🤖 대조 작업이 끝났습니다! '3. 최종 검토' 탭에서 다운로드하세요.")[cite: 1]
+            st.session_state.processed_data = pd.DataFrame(final_rows)
+            st.success("🤖 대조 작업이 끝났습니다! '3. 최종 검토' 탭에서 다운로드하세요.")
 
 # ==========================================
-# TAB 3: 최종 검토 및 내보내기[cite: 1]
+# TAB 3: 최종 검토 및 내보내기
 # ==========================================
 with tab3:
-    st.header("📊 데이터 통합 검토 및 세무사 전달")[cite: 1]
+    st.header("📊 데이터 통합 검토 및 세무사 전달")
     
-    if st.session_state.processed_data is None:[cite: 1]
-        st.info("2번째 탭에서 데이터를 업로드하고 매칭을 먼저 시작해 주세요.")[cite: 1]
+    if st.session_state.processed_data is None:
+        st.info("2번째 탭에서 데이터를 업로드하고 매칭을 먼저 시작해 주세요.")
     else:
-        df = st.session_state.processed_data.copy()[cite: 1]
-        st.subheader("💡 추출 내역 실시간 수정 및 편집")[cite: 1]
+        df = st.session_state.processed_data.copy()
+        st.subheader("💡 추출 내역 실시간 수정 및 편집")
         
         edited_df = st.data_editor(
             df,
@@ -256,116 +256,112 @@ with tab3:
             },
             hide_index=True,
             use_container_width=True
-        )[cite: 1]
+        )
         
-        st.markdown("### 📈 매칭 현황 요약")[cite: 1]
-        status_counts = edited_df["status"].value_counts()[cite: 1]
-        c1, c2, c3, c4 = st.columns(4)[cite: 1]
-        c1.metric("✅ 정상 매칭 완료", status_counts.get("✅ 매칭 완료", 0))[cite: 1]
-        c2.metric("🔄 정기 고정 지출", status_counts.get("🔄 고정 지출 (Vertrag)", 0))[cite: 1]
-        c3.metric("⚠️ 증빙만 존재 (현금 등)", status_counts.get("⚠️ 영수증만 존재", 0))[cite: 1]
-        c4.metric("❌ 증빙 누락 (Konto 내역만)", status_counts.get("❌ 증빙 누락", 0), delta_color="inverse")[cite: 1]
+        st.markdown("### 📈 매칭 현황 요약")
+        status_counts = edited_df["status"].value_counts()
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("✅ 정상 매칭 완료", status_counts.get("✅ 매칭 완료", 0))
+        c2.metric("🔄 정기 고정 지출", status_counts.get("🔄 고정 지출 (Vertrag)", 0))
+        c3.metric("⚠️ 증빙만 존재 (현금 등)", status_counts.get("⚠️ 영수증만 존재", 0))
+        c4.metric("❌ 증빙 누락 (Konto 내역만)", status_counts.get("❌ 증빙 누락", 0), delta_color="inverse")
         
-        st.markdown("---")[cite: 1]
-        st.subheader("📥 세무사용 최종 파일 일괄 다운로드")[cite: 1]
-        col_down1, col_down2 = st.columns(2)[cite: 1]
+        st.markdown("---")
+        st.subheader("📥 세무사용 최종 파일 일괄 다운로드")
+        col_down1, col_down2 = st.columns(2)
         
         with col_down1:
-            st.write("📂 **1. 세무 데이터 내보내기 (Excel & PDF)**")[cite: 1]
+            st.write("📂 **1. 세무 데이터 내보내기 (Excel & PDF)**")
             
             # Excel 익스포트
-            excel_buffer = io.BytesIO()[cite: 1]
-            final_excel_df = edited_df.drop(columns=["brutto_val"])[cite: 1]
-            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:[cite: 1]
-                final_excel_df.to_excel(writer, index=False, sheet_name="Beleg_Matching_List")[cite: 1]
+            excel_buffer = io.BytesIO()
+            final_excel_df = edited_df.drop(columns=["brutto_val"])
+            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                final_excel_df.to_excel(writer, index=False, sheet_name="Beleg_Matching_List")
                 
             st.download_button(
                 label="🟢 세무사용 엑셀 파일 (.xlsx) 다운로드",
                 data=excel_buffer.getvalue(),
                 file_name=f"BelegFlow_Steuerberater_{datetime.now().strftime('%Y%m')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )[cite: 1]
+            )
             
             # ------------------------------------------
-            # [안정화 패치] 폰트 에러 없는 표준 고드가 내장된 PDF 렌더링 파트
+            # PDF 보고서 내보내기 영역
             # ------------------------------------------
             st.write("") 
-            pdf_buffer = io.BytesIO()[cite: 1]
+            pdf_buffer = io.BytesIO()
             
-            # Sparkasse USD 외화 연동 기준 인스턴스 생성[cite: 1]
-            pdf = BelegFlowPDF(currency="USD")[cite: 1]
-            pdf.alias_nb_pages()[cite: 1]
+            pdf = BelegFlowPDF(currency="USD")
+            pdf.alias_nb_pages()
+            pdf.add_page()
             
-            # [핵심 변경]: fpdf2의 코어 표준 폰트인 기본 'Helvetica'를 사용하여 
-            # 폰트 누락 오류(Font not found)를 100% 방지하고, 내부 인코딩을 통해 
-            # 독일어 움라우트 데이터 처리를 강제 맵핑합니다.
-            pdf.add_page()[cite: 1]
-            
-            # 테이블 헤더 스타일 빌드[cite: 1]
+            # 테이블 헤더 스타일 빌드
             pdf.set_font("Helvetica", "B", 10)
-            pdf.set_fill_color(240, 244, 248)[cite: 1]
-            pdf.set_text_color(44, 62, 80)[cite: 1]
+            pdf.set_fill_color(240, 244, 248)
+            pdf.set_text_color(44, 62, 80)
             
-            pdf_headers = ["Datum", "Buchungstext (Begünstigter)", "Betrag", "Konto"][cite: 1]
-            widths = [25, 85, 40, 40][cite: 1]
+            pdf_headers = ["Datum", "Buchungstext (Begünstigter)", "Betrag", "Konto"]
+            widths = [25, 85, 40, 40]
             
             for h_text, w in zip(pdf_headers, widths):
                 pdf.cell(w, 10, h_text.encode('latin1', 'replace').decode('latin1'), border=1, fill=True, align="C")
-            pdf.ln()[cite: 1]
+            pdf.ln()
             
-            # 데이터 로드 및 인코딩 가공 루프[cite: 1]
+            # 데이터 로드 및 인코딩 가공 루프
             pdf.set_font("Helvetica", "", 9)
-            pdf.set_text_color(51, 51, 51)[cite: 1]
+            pdf.set_text_color(51, 51, 51)
             
-            for idx, row in edited_df.iterrows():[cite: 1]
+            for idx, row in edited_df.iterrows():
                 # 1. 날짜
-                pdf.cell(widths[0], 10, str(row.get("buchungsdatum", "-")), border=1, align="C")[cite: 1]
+                pdf.cell(widths[0], 10, str(row.get("buchungsdatum", "-")), border=1, align="C")
                 
-                # 2. 적요 (독일어 움라우트 깨짐 방지 인코딩 우회 적용)
+                # 2. 적요 (독일어 움라우트 우회 인코딩)
                 raw_text = str(row.get("begünstigter", "-"))
                 safe_text = raw_text.encode('latin1', 'replace').decode('latin1')
                 
-                curr_x = pdf.get_x()[cite: 1]
-                curr_y = pdf.get_y()[cite: 1]
-                pdf.multi_cell(widths[1], 10, safe_text, border=1, align="L")[cite: 1]
-                pdf.set_xy(curr_x + widths[1], curr_y)[cite: 1]
+                curr_x = pdf.get_x()
+                curr_y = pdf.get_y()
+                pdf.multi_cell(widths[1], 10, safe_text, border=1, align="L")
+                pdf.set_xy(curr_x + widths[1], curr_y)
                 
-                # 3. 금액 (Sparkasse USD 매핑 포맷팅)[cite: 1]
-                raw_umsatz = str(row.get("umsatz", "-"))[cite: 1]
-                if raw_umsatz != "-":[cite: 1]
-                    amount_str = raw_umsatz.replace("€", "USD")[cite: 1]
+                # 3. 금액 포맷팅
+                raw_umsatz = str(row.get("umsatz", "-"))
+                if raw_umsatz != "-":
+                    amount_str = raw_umsatz.replace("€", "USD")
                 else:
-                    amount_str = f"{row.get('brutto_val', 0.00):.2f} USD"[cite: 1]
-                pdf.cell(widths[2], 10, amount_str, border=1, align="R")[cite: 1]
+                    amount_str = f"{row.get('brutto_val', 0.00):.2f} USD"
+                pdf.cell(widths[2], 10, amount_str, border=1, align="R")
                 
-                # 4. SKR 계정 코드[cite: 1]
-                pdf.cell(widths[3], 10, str(row.get("skr_code", "-")), border=1, align="C")[cite: 1]
-                pdf.ln()[cite: 1]
+                # 4. SKR 계정 코드
+                pdf.cell(widths[3], 10, str(row.get("skr_code", "-")), border=1, align="C")
+                pdf.ln()
                 
-            pdf_bytes = pdf.output()[cite: 1]
-            pdf_buffer.write(pdf_bytes)[cite: 1]
-            pdf_buffer.seek(0)[cite: 1]
+            pdf_bytes = pdf.output()
+            pdf_buffer.write(pdf_bytes)
+            pdf_buffer.seek(0)
             
             st.download_button(
                 label="🔴 세무사 대조용 PDF 보고서 (.pdf) 다운로드",
                 data=pdf_buffer.getvalue(),
                 file_name=f"BelegFlow_Kontoauszug_{datetime.now().strftime('%Y%m')}.pdf",
                 mime="application/pdf"
-            )[cite: 1]
+            )
             
         with col_down2:
-            st.write("🗂️ **2. 다이어트 정렬 파일 묶음 내보내기 (ZIP)**")[cite: 1]
-            zip_buffer = io.BytesIO()[cite: 1]
-            with zipfile.ZipFile(zip_buffer, "w") as zip_file:[cite: 1]
-                for idx, row in edited_df.iterrows():[cite: 1]
-                    if row["verknüpfter_beleg"] != "-":[cite: 1]
-                        virtual_pdf_content = b"%PDF-1.4 Simulated Beleg-Flow Output File Content"[cite: 1]
-                        zip_file.writestr(row["verknüpfter_beleg"], virtual_pdf_content)[cite: 1]
+            st.write("🗂️ **2. 다이어트 정렬 파일 묶음 내보내기 (ZIP)**")
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w") as zip_file:
+                for idx, row in edited_df.iterrows():
+                    if row["verknüpfter_beleg"] != "-":
+                        virtual_pdf_content = b"%PDF-1.4 Simulated Beleg-Flow Output File Content"
+                        zip_file.writestr(row["verknüpfter_beleg"], virtual_pdf_content)
                         
             st.download_button(
                 label="📦 다이어트 파일명 영수증 묶음 (.zip) 다운로드",
                 data=zip_buffer.getvalue(),
                 file_name=f"BelegFlow_Receipts_{datetime.now().strftime('%Y%m')}.zip",
                 mime="application/zip"
-            )[cite: 1]
-        st.info("💡 **세무사 전달 팁**: 다운로드한 세 파일(Excel, PDF, ZIP)을 그대로 세무사에게 넘기면 데이터 임포트 및 매칭 증빙 대조가 즉시 완료됩니다.")[cite: 1]
+            )
+        st.info("💡 **세무사 전달 팁**: 다운로드한 세 파일(Excel, PDF, ZIP)을 그대로 세무사에게 넘기면 데이터 임포트 및 매칭 증빙 대조가 즉시 완료됩니다.")
+    
