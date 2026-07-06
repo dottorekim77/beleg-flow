@@ -44,6 +44,21 @@ INITIAL_VENDORS = {
     "Ionq":       {"SKR03": "4980 - Betriebsbedarf", "SKR04": "6300 - Sonstige Aufwendungen"},
 }
 
+# ══════════════════════════════════════════════════════════════════════════════
+# API AUTHENTIFIZIERUNG (오류 해결을 위해 최상단으로 이동)
+# ══════════════════════════════════════════════════════════════════════════════
+API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+if not API_KEY:
+    # 폼 내부나 하단 렌더링 시 스코프 붕괴를 막기 위해 최상단에 사이드바 혹은 메인 텍스트 인풋 배치
+    API_KEY = st.text_input("🔑 Gemini API-Key eingeben", type="password", key="main_api_key_input")
+    if API_KEY: 
+        genai.configure(api_key=API_KEY)
+else:
+    genai.configure(api_key=API_KEY)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# APP INITIALIZATION
+# ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 
 st.markdown("""
@@ -54,8 +69,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.6 - Pure German Format Mode)")
-st.caption("BWA 및 DATEV 지침에 맞게 모든 금액 표시와 파일명을 독일식(1.234,56)으로 전면 수정한 버전입니다.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.7 - Scope Fixed)")
+st.caption("변수 정의 및 호출 스코프를 최상단으로 격리하여 초기 로드 시 변수 미선언 오류를 방지한 안정화 버전입니다.")
 
 if st.button("🔄 시스템 캐시 및 메모리 강제 초기화 (먹통 해결용)"):
     st.cache_data.clear()
@@ -76,15 +91,9 @@ if "current_page" not in st.session_state:
 # HELPER: GERMAN NUMBER FORMATTER
 # ══════════════════════════════════════════════════════════════════════════════
 def to_german_amount_str(val: float) -> str:
-    """
-    숫자를 독일식 포맷(천단위 점, 소수점 콤마) 문자열로 변환합니다.
-    예: 1250.45 -> "1.250,45"
-    """
+    """숫자를 독일식 포맷(천단위 점, 소수점 콤마) 문자열로 변환합니다."""
     try:
-        # 미국식 기본 포맷 생성 (1,250.45)
         us_style = f"{float(val):,.2f}"
-        # 콤마와 마침표를 스와프하여 독일식으로 치환
-        # 임시 플레이스홀더 사용
         placed = us_style.replace(",", "PLACEHOLDER")
         placed = placed.replace(".", ",")
         german_style = placed.replace("PLACEHOLDER", ".")
@@ -93,21 +102,15 @@ def to_german_amount_str(val: float) -> str:
         return "0,00"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BACKEND ENGINE & FILENAME BUILDER (독일식 숫자 포맷 완전 적용)
+# BACKEND ENGINE & FILENAME BUILDER
 # ══════════════════════════════════════════════════════════════════════════════
-
 def sanitize_filename(text: str) -> str: 
     return _ILLEGAL_CHARS.sub("", text).strip()
 
 def build_datev_filename(date_str: str, vendor: str, brutto_eur: float, ausgang_inv: str) -> str:
-    """
-    규격: 날짜_판매점_독일식가격EUR_INV-우리회사인보이스번호.pdf
-    예시: 20260706_Amazon_1.250,45EUR_INV-1024.pdf
-    """
+    """독일 실무 표준 정렬 방식 (20260706_Amazon_1.250,45EUR)"""
     d_clean = date_str.replace('-', '')
     v_clean = sanitize_filename(vendor).replace(" ", "")[:12]
-    
-    # 독일식 숫자 문자열 결합 (1.250,45EUR)
     p_part  = f"{to_german_amount_str(brutto_eur)}EUR"
     
     base_name = f"{d_clean}_{v_clean}_{p_part}"
@@ -237,7 +240,6 @@ def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple[float, flo
 # ══════════════════════════════════════════════════════════════════════════════
 # REKALKULATION & EXPORT
 # ══════════════════════════════════════════════════════════════════════════════
-
 def on_table_edited() -> None:
     edit_state  = st.session_state.get("beleg_editor_key", {})
     edited_rows = edit_state.get("edited_rows", {})
@@ -262,7 +264,6 @@ def on_table_edited() -> None:
         df.at[global_idx, "Vorsteuer 7%"]  = mwst_7
         df.at[global_idx, "Nettobetrag (Haben)"]    = netto
         
-        # 수정된 독일식 포맷 명세로 파일명 실시간 갱신
         df.at[global_idx, "Zukünftiger DATEV-Dateiname"] = build_datev_filename(
             str(df.at[global_idx, "Rechnungsdatum"]), 
             str(df.at[global_idx, "Verkäufer"]), 
@@ -285,7 +286,6 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
         for row in ws.iter_rows(min_row=2):
             for col_idx, cell in enumerate(row, start=1):
                 cell.border = border_style
-                # 엑셀 다운로드 파일 내부 포맷도 완벽한 독일식 회계 구조 적용 (#.##0,00 €)
                 if col_idx in (6, 7, 8, 9): cell.number_format = '#.##0,00" €"'
                 elif col_idx in (1, 5): cell.alignment = Alignment(horizontal="right")
 
@@ -302,7 +302,6 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN UI
 # ══════════════════════════════════════════════════════════════════════════════
-
 with st.expander("📝 Buchungsregeln verwalten", expanded=False):
     st.caption("Verwalten Sie hier Ihre automatischen Zuweisungsregeln für bekannte Kreditoren.")
     
@@ -368,7 +367,6 @@ if uploaded_files:
                 mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
                 is_cc_initial = (default_zahlart == "Kreditkarte")
 
-                # 최초 렌더링용 파일명 빌드 (독일 표기 탑재)
                 generated_filename = build_datev_filename(date_str, vendor, total, "")
 
                 rows.append({
@@ -415,7 +413,6 @@ if uploaded_files:
 
         st.markdown(f"**📋 Belege bearbeiten (Seite {page + 1} von {max_pages} — Gesamt: {total_rows} Einträge)**")
 
-        # Streamlit 데이터 에디터 내부에서도 완벽한 독일 표준 통화 표기를 강제하기 위해 포맷 문자열 수정
         st.data_editor(
             df_page,
             use_container_width=True, 
@@ -428,7 +425,7 @@ if uploaded_files:
                 "Verkäufer":        st.column_config.TextColumn("Verkäufer", width="medium"),
                 "Beleg_Nr":        st.column_config.TextColumn("Beleg_Nr (구매영수증번호)", width="medium"),
                 "Beleg-Soll (Orig.)":    st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True, width="small"), 
-                "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%.2f €", width="small"), # 수치형은 기본 로케일 매핑을 따르거나 문자열로 처리
+                "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%.2f €", width="small"),
                 "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳 CC"),
                 "Zahlweg (DATEV)":         st.column_config.TextColumn("Zahlweg (DATEV)", disabled=True, width="small"),
                 f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium"),
