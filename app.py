@@ -389,7 +389,6 @@ with tab2:
         for b in bank_pool:
             b_amount_abs = abs(b["amount"])
             
-            # 🛠️ [요청 반영] AI 추천 코드 또는 사전정의 하드코딩 제거 -> 수동 입력이 없을 시 빈 공백 지정
             row = {
                 "Beleg_Nr": "",
                 "Buchungsdatum": b["datum"],
@@ -400,7 +399,7 @@ with tab2:
                 "Vorsteuer 7%": 0.0,
                 "Nettobetrag (Haben)": b_amount_abs,
                 "Zahlweg (DATEV)": default_zahlart,
-                "SKR_Konto": "", # 빈 값으로 시작 (세무사 확인용 기본값)
+                "SKR_Konto": "", 
                 "Steuerschlüssel": "AUTO_19",
                 "🔗 Ausgangs-INV": "",
                 "Zukünftiger DATEV-Dateiname": "",
@@ -459,7 +458,7 @@ with tab2:
                     "Beleg_Nr": r["beleg_nr"], "Buchungsdatum": r["datum"], "Begünstigter": r["vendor"],
                     "Konto 내역 금액": "-", "Bruttobetrag (EUR)": r["total"],
                     "USt/Vorsteuer 19%": mwst_19, "Vorsteuer 7%": mwst_7, "Nettobetrag (Haben)": netto,
-                    "Zahlweg (DATEV)": "Bar", "SKR_Konto": "", # 빈 값 지정
+                    "Zahlweg (DATEV)": "Bar", "SKR_Konto": "", 
                     "Steuerschlüssel": r["mwst_type"], "🔗 Ausgangs-INV": "", "Zukünftiger DATEV-Dateiname": fn,
                     "Status": "⚠️ 영수증만 존재", "Status_Flag": "receipt_only",
                     "_FileExt": r["ext"], "_RawBytes": r["bytes"], "_OcrText": r["raw_text"]
@@ -487,7 +486,7 @@ with tab3:
         
         st.markdown("### 💡 실시간 전표 정정 테이블")
         
-        # 🔗 고정 키 문자열을 사용하여 안전한 딕셔너리 구조 생성
+        # 🔗 [원천 해결] 추가 속성(width, placeholder)을 아예 제거하여 메트릭 수집기 우회
         safe_config = {
             "Konto 내역 금액": st.column_config.TextColumn("Konto 내역 금액", disabled=True),
             "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%.2f EUR"),
@@ -495,7 +494,7 @@ with tab3:
             "Vorsteuer 7%": st.column_config.NumberColumn("Vorsteuer 7%", format="%.2f EUR"),
             "Nettobetrag (Haben)": st.column_config.NumberColumn("Nettobetrag (Haben)", format="%.2f EUR"),
             "Zahlweg (DATEV)": st.column_config.SelectboxColumn("Zahlweg (DATEV)", options=ZAHLART_OPTIONS),
-            "SKR_Konto": st.column_config.TextColumn("SKR_Konto", width="medium", placeholder="Prüfung durch Steuerberater"),
+            "SKR_Konto": st.column_config.TextColumn("SKR_Konto"),
             "Steuerschlüssel": st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"]),
             "Status": st.column_config.TextColumn("Status", disabled=True),
             "_FileExt": None, "_RawBytes": None, "_OcrText": None, "Status_Flag": None
