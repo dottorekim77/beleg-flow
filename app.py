@@ -12,7 +12,7 @@ from pypdf import PdfReader, PdfWriter
 from PIL import Image
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CONFIG & HARD RESET (캐시 및 데드락 원천 차단)
+# CONFIG & HARD RESET
 # ══════════════════════════════════════════════════════════════════════════════
 PAGE_TITLE      = "DATEV Beleg-Parser Pro AI"
 PAGE_ICON       = "🧾"
@@ -46,7 +46,6 @@ INITIAL_VENDORS = {
 
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 
-# 이전 UI 찌꺼기 제거용 CSS
 st.markdown("""
     <style>
         [data-testid="stSidebarNav"] {display: none !important;}
@@ -55,10 +54,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.0 - Anti-Freeze Mode)")
-st.caption("기존 캐시를 무력화하고 st.status 인터페이스로 무한 프리징을 방지한 완전 청정 버전입니다.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.1 - Custom Filename Mode)")
+st.caption("Ausgangs-INV를 파일명에서 완전히 배제하고, RE-xxx 및 INV-xxx 구조로 분류 명확성을 극대화한 버전입니다.")
 
-# 개발 중 꼬인 캐시를 즉시 날릴 수 있는 수동 버튼 배치
 if st.button("🔄 시스템 캐시 및 메모리 강제 초기화 (먹통 해결용)"):
     st.cache_data.clear()
     for key in list(st.session_state.keys()):
@@ -85,10 +83,24 @@ else:
     genai.configure(api_key=API_KEY)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BACKEND ENGINE (타임아웃 대폭 축소: 10초)
+# BACKEND ENGINE & FILENAME BUILDER (수정 항목 반영)
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ⚠️ 먹통 예방을 위해 기존 캐시 데코레이터를 일시적으로 제거하거나 함수명을 변경하여 구 캐시와 격리합니다.
+def sanitize_filename(text: str) -> str: 
+    return _ILLEGAL_CHARS.sub("", text).strip()
+
+def build_datev_filename(row_no: int, date_str: str, beleg_nr: str, vendor: str, brutto_eur: float) -> str:
+    """
+    규격: RE-xxx_날짜_INV-xxx_판매점_가격.pdf (Ausgangs-INV는 완전 배제)
+    """
+    re_part = f"RE-{int(row_no):03d}"
+    d_clean = date_str.replace('-', '')
+    inv_part = f"INV-{sanitize_filename(beleg_nr)}" if beleg_nr and beleg_nr.lower() not in ("", "none") else "INV-NONE"
+    v_clean = sanitize_filename(vendor).replace(" ", "")[:12]
+    p_part = f"{brutto_eur:.2f}EUR"
+    
+    return f"{re_part}_{d_clean}_{inv_part}_{v_clean}_{p_part}.pdf"
+
 def ask_gemini_vision_direct(file_bytes: bytes, mime_type: str, skr_mode: str) -> tuple:
     fallback = ("", datetime.now().strftime("%Y-%m-%d"), "Fehler/Timeout", 0.0, "EUR", "", "AUTO_19", "No OCR text")
     
@@ -98,7 +110,6 @@ def ask_gemini_vision_direct(file_bytes: bytes, mime_type: str, skr_mode: str) -
             model = genai.GenerativeModel(GEMINI_MODEL)
             prompt_text = get_gemini_prompt(skr_mode)
             
-            # 타임아웃을 10초로 더 타이트하게 잡아 먹통 상태를 빠르게 찢고 나옵니다.
             response = model.generate_content(
                 [{"mime_type": mime_type, "data": file_bytes}, prompt_text],
                 request_options={"timeout": 10.0} 
@@ -107,7 +118,7 @@ def ask_gemini_vision_direct(file_bytes: bytes, mime_type: str, skr_mode: str) -
             beleg_nr, d_str, ven, tot, cur, kat, m_type = _parse_gemini_response(response.text)
             return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text
             
-        except Exception as e:
+        except Exception:
             if attempt == max_retries - 1:
                 return fallback
             time.sleep(FREE_TIER_DELAY)
@@ -142,18 +153,6 @@ def create_sandwich_pdf(file_bytes: bytes, ext: str, raw_ai_text: str) -> bytes:
         writer.write(output_buf)
         return output_buf.getvalue()
     except Exception: return file_bytes
-
-def sanitize_filename(text: str) -> str: return _ILLEGAL_CHARS.sub("", text).strip()
-
-def build_datev_filename(date_str: str, inv_nr: str, vendor: str, beleg_nr: str, brutto_eur: float, zahlart: str) -> str:
-    d_clean = date_str.replace('-', '')
-    inv_part = f"I-{sanitize_filename(inv_nr)}" if inv_nr and inv_nr.strip() else "I-NONE"
-    v_clean = sanitize_filename(vendor).replace(" ", "")[:10]
-    b_part = f"B-{sanitize_filename(beleg_nr)}" if beleg_nr and beleg_nr.lower() not in ("", "none") else "B-NONE"
-    p_part = f"{brutto_eur:.2f}EUR"
-    z_code = "BANK" if Z_CODE_MAP.get(zahlart, "BANK") == "BANK" else "CC"
-    
-    return f"{d_clean}_{inv_part}_{v_clean}_{b_part}_{p_part}_{z_code}.pdf"
 
 def get_gemini_prompt(skr_mode: str) -> str:
     return """Du bist ein Experte für deutsche Finanzbuchhaltung. Extrahiere folgende Daten:
@@ -234,7 +233,8 @@ def on_table_edited() -> None:
         local_idx = int(row_idx_str)
         global_idx = df.index[page * ITEMS_PER_PAGE + local_idx]
         
-        for col, new_val in changes.items(): df.at[global_idx, col] = new_val
+        for col, new_val in changes.items(): 
+            df.at[global_idx, col] = new_val
 
         if "Is_Kreditkarte" in changes:
             df.at[global_idx, "Zahlweg (DATEV)"] = "Kreditkarte" if changes["Is_Kreditkarte"] else "Firmenkonto"
@@ -245,10 +245,13 @@ def on_table_edited() -> None:
         df.at[global_idx, "Vorsteuer 7%"]  = mwst_7
         df.at[global_idx, "Nettobetrag (Haben)"]    = netto
         
+        # 💡 수정 발생 시에도 오직 고정된 규격으로만 파일명 재빌드 (🔗 Ausgangs-INV 제외)
         df.at[global_idx, "Zukünftiger DATEV-Dateiname"] = build_datev_filename(
-            str(df.at[global_idx, "Rechnungsdatum"]), str(df.at[global_idx, "🔗 Ausgangs-INV"]),
-            str(df.at[global_idx, "Verkäufer"]), str(df.at[global_idx, "Beleg_Nr"]),
-            brutto_eur, str(df.at[global_idx, "Zahlweg (DATEV)"])
+            global_idx, 
+            str(df.at[global_idx, "Rechnungsdatum"]), 
+            str(df.at[global_idx, "Beleg_Nr"]),
+            str(df.at[global_idx, "Verkäufer"]), 
+            brutto_eur
         )
     st.session_state.edited_receipts = df
 
@@ -332,22 +335,24 @@ if uploaded_files:
         rows = []
         total_files = len(uploaded_files)
         
-        # 💡 무한 대기를 시각적으로 분쇄하기 위해 st.status 컨텍스트 적용
         with st.status("🚀 Document Processing Engine Initializing...", expanded=True) as status:
             for idx, uploaded_file in enumerate(uploaded_files):
-                status.update(label=f"🔄 Processing ({idx+1}/{total_files}): {uploaded_file.name}", state="running")
+                current_row_no = idx + 1
+                status.update(label=f"🔄 Processing ({current_row_no}/{total_files}): {uploaded_file.name}", state="running")
 
                 file_bytes = uploaded_file.read()
                 ext        = uploaded_file.name.rsplit(".", 1)[-1].lower()
                 mime_type  = MIME_MAP.get(ext, "application/octet-stream")
 
-                # 캐시 없는 다이렉트 엔진 호출
                 res = ask_gemini_vision_direct(file_bytes, mime_type, selected_skr)
                 beleg_nr, date_str, vendor, total, currency, _, mwst_type, raw_text = res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7]
 
                 assigned_kategorie = get_assigned_account(vendor, selected_skr)
                 mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
                 is_cc_initial = (default_zahlart == "Kreditkarte")
+
+                # 💡 최초 파일 생성 시 순번(current_row_no)을 주입하여 RE-xxx 기반 파일명 생성
+                generated_filename = build_datev_filename(current_row_no, date_str, beleg_nr, vendor, total)
 
                 rows.append({
                     "Rechnungsdatum":  date_str,                  
@@ -363,7 +368,7 @@ if uploaded_files:
                     "Vorsteuer 7%":   mwst_7,
                     "Nettobetrag (Haben)":      netto,
                     "Steuerschlüssel":        mwst_type,
-                    "Zukünftiger DATEV-Dateiname": build_datev_filename(date_str, "", vendor, beleg_nr, total, default_zahlart),
+                    "Zukünftiger DATEV-Dateiname": generated_filename,
                     "_FileExt": ext, "_RawBytes": file_bytes, "_OcrText": raw_text
                 })
                 
@@ -401,7 +406,7 @@ if uploaded_files:
             on_change=on_table_edited,
             column_config={
                 "Rechnungsdatum":  st.column_config.TextColumn("📅 Rechnungsdatum", width="small"),
-                "🔗 Ausgangs-INV":  st.column_config.TextColumn("🔗 Ausgangs-INV", width="medium"),
+                "🔗 Ausgangs-INV":  st.column_config.TextColumn("🔗 Ausgangs-INV (기록용)", width="medium"),
                 "Verkäufer":        st.column_config.TextColumn("Verkäufer", width="medium"),
                 "Beleg_Nr":        st.column_config.TextColumn("Beleg_Nr", width="medium"),
                 "Beleg-Soll (Orig.)":    st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True, width="small"), 
