@@ -58,25 +58,21 @@ st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.6 - Pure German Format Mode)"
 st.caption("BWA 및 DATEV 지침에 맞게 모든 금액 표시와 파일명을 독일식(1.234,56)으로 전면 수정한 버전입니다.")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# API AUTHENTIFIZIERUNG (안전한 최상단 인증 처리)
+# API AUTHENTIFIZIERUNG (Secrets 최우선 완전 보장 버전)
 # ══════════════════════════════════════════════════════════════════════════════
-# 1. 여기에 실제 발급받으신 Gemini API 키를 입력하세요.
-API_KEY = "여기에_실제_Gemini_API_키를_넣으세요" 
+# 1. Streamlit Secrets에서 먼저 로드 시도
+API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
-# 2. 하드코딩 키가 비어있다면 Streamlit Secrets에서 로드 시도
-if not API_KEY or API_KEY == "여기에_실제_Gemini_API_키를_넣으세요":
-    API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+# 2. Secrets에 없다면 소스코드 하드코딩 값 점검
+if not API_KEY or API_KEY == "":
+    API_KEY = "여기에_실제_Gemini_API_키를_넣으세요"
 
-# 3. 비밀번호 입력 창  fallback (Secrets나 하드코딩 키가 둘 다 없을 때만 표시)
-if not API_KEY or API_KEY == "여기에_실제_Gemini_API_키를_넣으세요":
-    API_KEY = st.text_input("🔑 Gemini API-Key eingeben", type="password", key="main_api_key_input")
+# 3. 둘 다 무효하다면 화면에 입력창을 띄워 사용자 입력 유도
+if not API_KEY or API_KEY == "여기에_실제_Gemini_API_키를_넣으세요" or API_KEY == "":
+    API_KEY = st.text_input("🔑 Gemini API-Key eingeben (Secrets 로드 실패)", type="password", key="main_api_key_input")
     if not API_KEY:
-        st.warning("⚠️ 시스템을 작동하려면 Gemini API 키를 입력하거나 소스 코드에 설정해 주세요.")
+        st.warning("⚠️ Streamlit Secrets 또는 아래 입력창에 올바른 Gemini API 키를 제공해야 시스템이 작동합니다.")
         st.stop()
-
-# 구글 Generative AI 모듈 초기화
-genai.configure(api_key=API_KEY)
-
 # ══════════════════════════════════════════════════════════════════════════════
 # CACHE & STATE RESET
 # ══════════════════════════════════════════════════════════════════════════════
