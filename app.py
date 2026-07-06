@@ -57,7 +57,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v5.9 - Pagination System)")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v5.9 - API Guard & Pagination)")
 st.caption("Automatisierte Belegfassung mit SKR-Klassifizierung. Das System teilt große Datenmengen in Seiten auf, um Scroll-Sprünge und unendlich lange Seiten zu verhindern.")
 
 if "custom_rules" not in st.session_state:
@@ -66,6 +66,16 @@ if "edited_receipts" not in st.session_state:
     st.session_state.edited_receipts = None
 if "current_page" not in st.session_state:
     st.session_state.current_page = 0
+
+# ══════════════════════════════════════════════════════════════════════════════
+# API AUTHENTIFIZIERUNG
+# ══════════════════════════════════════════════════════════════════════════════
+API_KEY: str = st.secrets.get("GEMINI_API_KEY", "")
+if not API_KEY:
+    API_KEY = st.text_input("🔑 Gemini API-Key eingeben", type="password")
+    if API_KEY: genai.configure(api_key=API_KEY)
+else:
+    genai.configure(api_key=API_KEY)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BACKEND ENGINE FUNCTIONS
@@ -201,7 +211,6 @@ def on_table_edited() -> None:
     page = st.session_state.current_page
     
     for row_idx_str, changes in edited_rows.items():
-        # 💡 현재 페이지 슬라이스 내의 상대 인덱스를 글로벌 데이터프레임 인덱스로 매핑
         local_idx = int(row_idx_str)
         global_idx = df.index[page * ITEMS_PER_PAGE + local_idx]
         
@@ -289,11 +298,16 @@ with col_cfg1: default_zahlart = st.radio("💳 Standard-Zahlweg (DATEV)", optio
 with col_cfg2: selected_skr = st.radio("📋 Standardkontenrahmen (SKR)", options=["SKR03", "SKR04"], index=1, horizontal=True)
 
 if uploaded_files:
+    # 💡 [보안 가드 추가]: API_KEY 검증 전 하단 프로세스 차단으로 NameError 해결
+    if not API_KEY:
+        st.warning("⚠️ Bitte geben Sie zuerst den Gemini API-Key ein, um die Belege zu analysieren.")
+        st.stop()
+
     batch_key = "".join(f.name for f in uploaded_files) + f"_{selected_skr}_{default_zahlart}"
     if st.session_state.get("last_batch_key") != batch_key:
         st.session_state.last_batch_key = batch_key
         st.session_state.edited_receipts = None
-        st.session_state.current_page = 0  # 초기화
+        st.session_state.current_page = 0
 
     if st.session_state.edited_receipts is None:
         rows = []
@@ -344,7 +358,6 @@ if uploaded_files:
         total_rows = len(df)
         max_pages = (total_rows - 1) // ITEMS_PER_PAGE + 1
         
-        # 안전장치: 현재 페이지 인덱스 보정
         if st.session_state.current_page >= max_pages:
             st.session_state.current_page = 0
             
@@ -352,7 +365,6 @@ if uploaded_files:
         start_idx = page * ITEMS_PER_PAGE
         end_idx = start_idx + ITEMS_PER_PAGE
         
-        # 💡 현재 페이지에 해당하는 데이터 조각 추출
         df_page = df.iloc[start_idx:end_idx]
 
         st.markdown(f"**📋 Belege bearbeiten (Seite {page + 1} von {max_pages} — Gesamt: {total_rows} Einträge)**")
@@ -382,7 +394,6 @@ if uploaded_files:
             },
         )
         
-        # 🕹️ 페이지 제어 컨트롤러 (이전 / 다음 버튼)
         p_col1, p_col2, p_col3 = st.columns([1, 4, 1])
         with p_col1:
             if st.button("⬅️ Vorherige", disabled=(page == 0), use_container_width=True):
@@ -397,7 +408,7 @@ if uploaded_files:
 
     render_isolated_data_editor()
 
-    # DOWNLOADS (다운로드는 항상 전체 100줄 데이터를 합쳐서 익스포트합니다)
+    # DOWNLOADS
     df_final = st.session_state.edited_receipts
     today = datetime.now().strftime("%Y%m%d")
     st.markdown("### 📥 Bereitstellung der DATEV-Exportdateien")
