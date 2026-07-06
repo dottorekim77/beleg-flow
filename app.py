@@ -158,7 +158,7 @@ Kategorie: AUTO
 MwSt_Type: [Type]"""
 
 def _parse_german_amount(raw: str) -> float:
-    s = re.sub(r"[€$£\s]", "", raw)
+    s = re.sub(r"[EUR$£\s]", "", raw)
     s = re.sub(r"(?i)(eur|usd|gbp)", "", s).strip()
     if not s: return 0.0
     if "." in s and "," in s:
@@ -244,7 +244,7 @@ def parse_bank_statement(uploaded_bank_files) -> list:
                 
                 # 정규식을 이용해 독일 통화 금액 패턴 및 날짜 구조 러프 파싱 후 가상 리스트 빌드
                 date_pattern = r"(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})"
-                amount_pattern = r"(-?\d+[\.,]\d{2})\s*(?:€|EUR)?"
+                amount_pattern = r"(-?\d+[\.,]\d{2})\s*(?:EUR|EUR)?"
                 lines = full_text.split("\n")
                 for line in lines:
                     d_m = re.search(date_pattern, line)
@@ -313,7 +313,7 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
         for row in ws.iter_rows(min_row=2):
             for col_idx, cell in enumerate(row, start=1):
                 cell.border = border_style
-                if col_idx in (4, 5, 6, 7): cell.number_format = '#,##0.00" €"'
+                if col_idx in (4, 5, 6, 7): cell.number_format = '#,##0.00" EUR"'
                 elif col_idx == 3: cell.alignment = Alignment(horizontal="right")
 
         for col in ws.columns:
@@ -443,7 +443,7 @@ with tab2:
                 "Beleg_Nr": "",
                 "Buchungsdatum": b["datum"],
                 "Begünstigter": b["vendor"],
-                "Konto 내역 금액": f"{b['amount']:.2f} €",
+                "Konto 내역 금액": f"{b['amount']:.2f} EUR",
                 "Bruttobetrag (EUR)": b_amount_abs,
                 "USt/Vorsteuer 19%": 0.0,
                 "Vorsteuer 7%": 0.0,
@@ -548,10 +548,10 @@ with tab3:
             column_config={
                 f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium", placeholder="Pruefung durch Steuerberater"),
                 "Konto 내역 금액": st.column_config.TextColumn("Konto 내역 금액", disabled=True),
-                "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €"),
-                "USt/Vorsteuer 19%": st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
-                "Vorsteuer 7%": st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
-                "Nettobetrag (Haben)": st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
+                "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f EUR"),
+                "USt/Vorsteuer 19%": st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f EUR"),
+                "Vorsteuer 7%": st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f EUR"),
+                "Nettobetrag (Haben)": st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f EUR"),
                 "Zahlweg (DATEV)": st.column_config.SelectboxColumn("Zahlweg (DATEV)", options=ZAHLART_OPTIONS),
                 "Steuerschlüssel": st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"]),
                 "Status": st.column_config.TextColumn("Status", disabled=True),
