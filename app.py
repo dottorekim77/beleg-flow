@@ -45,6 +45,22 @@ INITIAL_VENDORS = {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# API AUTHENTIFIZIERUNG (가장 확실하게 직접 지정)
+# ══════════════════════════════════════════════════════════════════════════════
+# 외부 파일 인식 오류를 방지하기 위해 여기에 키를 직접 대입합니다.
+API_KEY = "여기에_실제_Gemini_API_키를_넣으세요" 
+
+if not API_KEY or API_KEY == "AQ.Ab8RN6IC-RyeZOrWpKfHT913EIz81B5036YoPwqekH6Qr_0YQA":
+    API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+    if not API_KEY:
+        API_KEY = st.text_input("🔑 Gemini API-Key eingeben", type="password", key="main_api_key_input")
+        if not API_KEY:
+            st.info("ℹ️ 서비스를 이용하시려면 Gemini API Key를 입력하거나 코드의 API_KEY 변수에 직접 지정해 주세요.")
+            st.stop()
+
+genai.configure(api_key=API_KEY)
+
+# ══════════════════════════════════════════════════════════════════════════════
 # APP INITIALIZATION & PAGE CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
@@ -57,20 +73,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.8 - API Lock Enhanced)")
-st.caption("API Key가 부재하거나 입력 중일 때 파싱 엔진이 먼저 실행되어 Fehler가 뜨는 현상을 방지한 버전입니다.")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# API AUTHENTIFIZIERUNG & LOCK (하단 로직 인터셉트 보완)
-# ══════════════════════════════════════════════════════════════════════════════
-API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-if not API_KEY:
-    API_KEY = st.text_input("🔑 Gemini API-Key eingeben", type="password", key="main_api_key_input")
-    if not API_KEY:
-        st.info("ℹ️ 서비스를 이용하시려면 Gemini API Key를 입력해 주세요. Secrets 설정이 되어 있다면 자동으로 로드됩니다.")
-        st.stop()  # 키가 입력될 때까지 하단 UI/코드 실행을 완전히 동결
-
-genai.configure(api_key=API_KEY)
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.9 - Key Hardcoded)")
+st.caption("인증 오류 우회를 위해 스크립트 내부에 API 키를 직접 바인딩할 수 있도록 수정한 버전입니다.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CACHE RESET & SESSION STATE
@@ -94,7 +98,6 @@ if "current_page" not in st.session_state:
 # HELPER: GERMAN NUMBER FORMATTER
 # ══════════════════════════════════════════════════════════════════════════════
 def to_german_amount_str(val: float) -> str:
-    """숫자를 독일식 포맷(천단위 점, 소수점 콤마) 문자열로 변환합니다."""
     try:
         us_style = f"{float(val):,.2f}"
         placed = us_style.replace(",", "PLACEHOLDER")
@@ -111,17 +114,14 @@ def sanitize_filename(text: str) -> str:
     return _ILLEGAL_CHARS.sub("", text).strip()
 
 def build_datev_filename(date_str: str, vendor: str, brutto_eur: float, ausgang_inv: str) -> str:
-    """독일 실무 표준 정렬 방식 (20260706_Amazon_1.250,45EUR)"""
     d_clean = date_str.replace('-', '')
     v_clean = sanitize_filename(vendor).replace(" ", "")[:12]
     p_part  = f"{to_german_amount_str(brutto_eur)}EUR"
-    
     base_name = f"{d_clean}_{v_clean}_{p_part}"
     
     if ausgang_inv and str(ausgang_inv).strip() and str(ausgang_inv).lower() != "none":
         inv_part = f"_INV-{sanitize_filename(str(ausgang_inv))}"
         return f"{base_name}{inv_part}.pdf"
-    
     return f"{base_name}.pdf"
 
 def ask_gemini_vision_direct(file_bytes: bytes, mime_type: str, skr_mode: str) -> tuple:
