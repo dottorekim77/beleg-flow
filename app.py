@@ -30,13 +30,19 @@ MIME_MAP = {
 }
 
 ZAHLART_OPTIONS = ["Firmenkonto", "Kreditkarte"]
-Z_CODE_MAP      = {"Firmenkonto": "BANK", "Kreditkarte": "KK"}
+Z_CODE_MAP      = {"Firmenkonto": "BANK", "Kreditkarte": "CC"}
 
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 
 INITIAL_VENDORS = {
     "Adobe":      {"SKR03": "4930 - Bürobedarf", "SKR04": "6815 - Bürobedarf"},
-    "Amazon":     {"SKR03": "4980 - Betriebsbedarf", "SKR04": "6300 - Sonstige Aufwendungen"}
+    "Amazon":     {"SKR03": "4980 - Betriebsbedarf", "SKR04": "6300 - Sonstige Aufwendungen"},
+    "Google":     {"SKR03": "4930 - Bürobedarf", "SKR04": "6815 - Bürobedarf"},
+    "Shell":      {"SKR03": "4530 - Kfz-Betriebskosten", "SKR04": "6520 - Kfz-Betriebskosten"},
+    "Aral":       {"SKR03": "4530 - Kfz-Betriebskosten", "SKR04": "6520 - Kfz-Betriebskosten"},
+    "Telekom":    {"SKR03": "4920 - Telefon", "SKR04": "6805 - Telefon"},
+    "Ionq":       {"SKR03": "4980 - Betriebsbedarf", "SKR04": "6300 - Sonstige Aufwendungen"},
+}
 
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 
