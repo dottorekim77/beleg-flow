@@ -45,19 +45,7 @@ INITIAL_VENDORS = {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# API AUTHENTIFIZIERUNG (오류 해결을 위해 최상단으로 이동)
-# ══════════════════════════════════════════════════════════════════════════════
-API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-if not API_KEY:
-    # 폼 내부나 하단 렌더링 시 스코프 붕괴를 막기 위해 최상단에 사이드바 혹은 메인 텍스트 인풋 배치
-    API_KEY = st.text_input("🔑 Gemini API-Key eingeben", type="password", key="main_api_key_input")
-    if API_KEY: 
-        genai.configure(api_key=API_KEY)
-else:
-    genai.configure(api_key=API_KEY)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# APP INITIALIZATION
+# APP INITIALIZATION & PAGE CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 
@@ -69,9 +57,24 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.7 - Scope Fixed)")
-st.caption("변수 정의 및 호출 스코프를 최상단으로 격리하여 초기 로드 시 변수 미선언 오류를 방지한 안정화 버전입니다.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.8 - API Lock Enhanced)")
+st.caption("API Key가 부재하거나 입력 중일 때 파싱 엔진이 먼저 실행되어 Fehler가 뜨는 현상을 방지한 버전입니다.")
 
+# ══════════════════════════════════════════════════════════════════════════════
+# API AUTHENTIFIZIERUNG & LOCK (하단 로직 인터셉트 보완)
+# ══════════════════════════════════════════════════════════════════════════════
+API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+if not API_KEY:
+    API_KEY = st.text_input("🔑 Gemini API-Key eingeben", type="password", key="main_api_key_input")
+    if not API_KEY:
+        st.info("ℹ️ 서비스를 이용하시려면 Gemini API Key를 입력해 주세요. Secrets 설정이 되어 있다면 자동으로 로드됩니다.")
+        st.stop()  # 키가 입력될 때까지 하단 UI/코드 실행을 완전히 동결
+
+genai.configure(api_key=API_KEY)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CACHE RESET & SESSION STATE
+# ══════════════════════════════════════════════════════════════════════════════
 if st.button("🔄 시스템 캐시 및 메모리 강제 초기화 (먹통 해결용)"):
     st.cache_data.clear()
     for key in list(st.session_state.keys()):
@@ -337,10 +340,6 @@ with col_cfg1: default_zahlart = st.radio("💳 Standard-Zahlweg (DATEV)", optio
 with col_cfg2: selected_skr = st.radio("📋 Standardkontenrahmen (SKR)", options=["SKR03", "SKR04"], index=1, horizontal=True)
 
 if uploaded_files:
-    if not API_KEY:
-        st.warning("⚠️ Bitte geben Sie zuerst den Gemini API-Key ein, um die Belege zu analysieren.")
-        st.stop()
-
     batch_key = "".join(f.name for f in uploaded_files) + f"_{selected_skr}_{default_zahlart}"
     if st.session_state.get("last_batch_key") != batch_key:
         st.session_state.last_batch_key = batch_key
