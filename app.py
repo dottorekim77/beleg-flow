@@ -158,7 +158,7 @@ Kategorie: AUTO
 MwSt_Type: [Type]"""
 
 def _parse_german_amount(raw: str) -> float:
-    s = re.sub(r"[EUR$£\s]", "", raw)
+    s = re.sub(r"[€$£\s]", "", raw)
     s = re.sub(r"(?i)(eur|usd|gbp)", "", s).strip()
     if not s: return 0.0
     if "." in s and "," in s:
@@ -207,13 +207,11 @@ def parse_bank_statement(uploaded_bank_files) -> list:
     for f in uploaded_bank_files:
         if f.name.lower().endswith(".csv"):
             try:
-                # 일반적인 독일 은행 CSV 포맷 디코딩 분기
                 df_b = pd.read_csv(f, sep=None, engine='python', encoding='utf-8-sig')
             except Exception:
                 f.seek(0)
                 df_b = pd.read_csv(f, sep=None, engine='python', encoding='latin1')
             
-            # 컬럼 표준화 매핑 시도
             rename_map = {}
             for col in df_b.columns:
                 c_lbl = str(col).lower()
@@ -242,9 +240,8 @@ def parse_bank_statement(uploaded_bank_files) -> list:
                 for page in pdf_reader.pages:
                     full_text += page.extract_text() + "\n"
                 
-                # 정규식을 이용해 독일 통화 금액 패턴 및 날짜 구조 러프 파싱 후 가상 리스트 빌드
                 date_pattern = r"(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})"
-                amount_pattern = r"(-?\d+[\.,]\d{2})\s*(?:EUR|EUR)?"
+                amount_pattern = r"(-?\d+[\.,]\d{2})\s*(?:€|EUR)?"
                 lines = full_text.split("\n")
                 for line in lines:
                     d_m = re.search(date_pattern, line)
@@ -252,7 +249,7 @@ def parse_bank_statement(uploaded_bank_files) -> list:
                     if d_m and a_m:
                         raw_amt = a_m.group(1)
                         amt = _parse_german_amount(raw_amt)
-                        if amt < 0: # 출금 내역 위주 파싱
+                        if amt < 0:
                             bank_records.append({
                                 "datum": d_m.group(1),
                                 "amount": amt,
@@ -261,7 +258,6 @@ def parse_bank_statement(uploaded_bank_files) -> list:
                             })
             except Exception: pass
             
-    # 파싱된 결과가 비어있을 시 상호 호환 데모용 테이블 자동 Fallback 구성
     if not bank_records:
         bank_records = [
             {"datum": "2026-06-15", "amount": -45.90, "vendor": "Amazon.de", "info": "Bestellung 302-11"},
@@ -313,7 +309,7 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
         for row in ws.iter_rows(min_row=2):
             for col_idx, cell in enumerate(row, start=1):
                 cell.border = border_style
-                if col_idx in (4, 5, 6, 7): cell.number_format = '#,##0.00" EUR"'
+                if col_idx in (4, 5, 6, 7): cell.number_format = '#,##0.00" €"'
                 elif col_idx == 3: cell.alignment = Alignment(horizontal="right")
 
         for col in ws.columns:
@@ -392,10 +388,8 @@ with tab2:
             st.warning("분석할 데이터를 업로드해 주세요.")
             st.stop()
             
-        # 1. 은행 계좌 내역 파싱 실행
         bank_pool = parse_bank_statement(uploaded_bank_files)
         
-        # 2. 업로드된 영수증 대상 Gemini AI 분석 루프 실행 (가짜 25유로 하드코딩 제거)
         receipt_pool = []
         if uploaded_receipt_files:
             total_files = len(uploaded_receipt_files)
@@ -423,11 +417,9 @@ with tab2:
                     time.sleep(FREE_TIER_DELAY)
             status_text.success("✅ 모든 영수증의 AI 분석 및 텍스트 추출이 완료되었습니다!")
 
-        # 3. 크로스 매칭 고도화 아키텍처 가동
         final_rows = []
         matched_receipt_indices = set()
         
-        # 고정 지출 맵 파싱
         fixed_rules = []
         for line in st.session_state.config["fixed_expenses"].split("\n"):
             if ":" in line:
@@ -435,7 +427,6 @@ with tab2:
                 if len(parts) == 3:
                     fixed_rules.append({"keyword": parts[0].strip(), "code": parts[1].strip(), "label": parts[2].strip()})
 
-        # 계좌 내역 기준으로 루프 기동
         for b in bank_pool:
             b_amount_abs = abs(b["amount"])
             
@@ -443,13 +434,13 @@ with tab2:
                 "Beleg_Nr": "",
                 "Buchungsdatum": b["datum"],
                 "Begünstigter": b["vendor"],
-                "Konto 내역 금액": f"{b['amount']:.2f} EUR",
+                "Konto 내역 금액": f"{b['amount']:.2f} €",
                 "Bruttobetrag (EUR)": b_amount_abs,
                 "USt/Vorsteuer 19%": 0.0,
                 "Vorsteuer 7%": 0.0,
                 "Nettobetrag (Haben)": b_amount_abs,
                 "Zahlweg (DATEV)": default_zahlart,
-                f"{selected_skr}": get_assigned_account(b["vendor"], selected_skr),
+                "SKR_Konto": get_assigned_account(b["vendor"], selected_skr),  # 고정 문자열 키 변경
                 "Steuerschlüssel": "AUTO_19",
                 "🔗 Ausgangs-INV": "",
                 "Zukünftiger DATEV-Dateiname": "",
@@ -458,22 +449,19 @@ with tab2:
                 "_FileExt": "pdf", "_RawBytes": b"", "_OcrText": ""
             }
             
-            # 고정지출 규칙 검사
             is_fixed = False
             for rule in fixed_rules:
                 if rule["keyword"].lower() in b["vendor"].lower() or rule["keyword"].lower() in b["info"].lower():
-                    row[f"{selected_skr}"] = f"{rule['code']} - {rule['label']}"
+                    row["SKR_Konto"] = f"{rule['code']} - {rule['label']}"  # 고정 문자열 키 변경
                     row["Status"] = "🔄 고정 지출 (Vertrag)"
                     row["Status_Flag"] = "fixed"
                     is_fixed = True
                     break
             
-            # 영수증 실시간 매칭
             if not is_fixed and receipt_pool:
                 for idx, r in enumerate(receipt_pool):
                     if idx in matched_receipt_indices: continue
                     
-                    # 날짜 파싱 대조 (3일 오차 범위 허용)
                     try:
                         b_date = datetime.strptime(b["datum"].replace(".","-"), "%Y-%m-%d" if "-" in b["datum"] else "%d-%m-%Y")
                         r_date = datetime.strptime(r["datum"], "%Y-%m-%d")
@@ -481,7 +469,6 @@ with tab2:
                     except Exception:
                         date_diff = 99
                     
-                    # 가격 일치성 및 날짜 조건 판정
                     if abs(b_amount_abs - r["total"]) < 0.02 and date_diff <= 3:
                         mwst_19, mwst_7, netto = calculate_tax_details(r["total"], r["mwst_type"])
                         row["Beleg_Nr"] = r["beleg_nr"]
@@ -492,7 +479,7 @@ with tab2:
                         row["Steuerschlüssel"] = r["mwst_type"]
                         row["Status"] = "✅ 매칭 완료"
                         row["Status_Flag"] = "matched"
-                        row[f"{selected_skr}"] = get_assigned_account(r["vendor"], selected_skr)
+                        row["SKR_Konto"] = get_assigned_account(r["vendor"], selected_skr)  # 고정 문자열 키 변경
                         row["_FileExt"] = r["ext"]
                         row["_RawBytes"] = r["bytes"]
                         row["_OcrText"] = r["raw_text"]
@@ -505,7 +492,6 @@ with tab2:
             )
             final_rows.append(row)
             
-        # 매칭되지 않고 남은 영수증 정보들을 하단에 인입 추가
         for idx, r in enumerate(receipt_pool):
             if idx not in matched_receipt_indices:
                 mwst_19, mwst_7, netto = calculate_tax_details(r["total"], r["mwst_type"])
@@ -514,7 +500,7 @@ with tab2:
                     "Beleg_Nr": r["beleg_nr"], "Buchungsdatum": r["datum"], "Begünstigter": r["vendor"],
                     "Konto 내역 금액": "-", "Bruttobetrag (EUR)": r["total"],
                     "USt/Vorsteuer 19%": mwst_19, "Vorsteuer 7%": mwst_7, "Nettobetrag (Haben)": netto,
-                    "Zahlweg (DATEV)": "Bar", f"{selected_skr}": get_assigned_account(r["vendor"], selected_skr),
+                    "Zahlweg (DATEV)": "Bar", "SKR_Konto": get_assigned_account(r["vendor"], selected_skr),  # 고정 문자열 키 변경
                     "Steuerschlüssel": r["mwst_type"], "🔗 Ausgangs-INV": "", "Zukünftiger DATEV-Dateiname": fn,
                     "Status": "⚠️ 영수증만 존재", "Status_Flag": "receipt_only",
                     "_FileExt": r["ext"], "_RawBytes": r["bytes"], "_OcrText": r["raw_text"]
@@ -533,7 +519,6 @@ with tab3:
     else:
         df_m = st.session_state.matching_result
         
-        # 메트릭 대시보드
         flags = df_m["Status_Flag"].value_counts()
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("✅ 정상 매칭 완료", flags.get("matched", 0))
@@ -546,12 +531,12 @@ with tab3:
             df_m,
             use_container_width=True, num_rows="fixed", height=400, key="matching_editor_key", on_change=on_matching_table_edited,
             column_config={
-                f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium", placeholder="Pruefung durch Steuerberater"),
+                "SKR_Konto": st.column_config.TextColumn(label=f"📊 {selected_skr}", width="medium", placeholder="Pruefung durch Steuerberater"),  # 고정 문자열 키로 수정 완료 및 label 매핑 처리
                 "Konto 내역 금액": st.column_config.TextColumn("Konto 내역 금액", disabled=True),
-                "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f EUR"),
-                "USt/Vorsteuer 19%": st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f EUR"),
-                "Vorsteuer 7%": st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f EUR"),
-                "Nettobetrag (Haben)": st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f EUR"),
+                "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%.2f EUR"),
+                "USt/Vorsteuer 19%": st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%.2f EUR"),
+                "Vorsteuer 7%": st.column_config.NumberColumn("Vorsteuer 7%", format="%.2f EUR"),
+                "Nettobetrag (Haben)": st.column_config.NumberColumn("Nettobetrag (Haben)", format="%.2f EUR"),
                 "Zahlweg (DATEV)": st.column_config.SelectboxColumn("Zahlweg (DATEV)", options=ZAHLART_OPTIONS),
                 "Steuerschlüssel": st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"]),
                 "Status": st.column_config.TextColumn("Status", disabled=True),
@@ -575,7 +560,6 @@ with tab3:
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                 for _, row in edited_df.iterrows():
-                    # 증빙이 결합된 전표 파일이 존재할 때만 샌드위치 PDF 압축 아카이빙
                     if row["_RawBytes"] != b"":
                         sandwich_pdf_bytes = create_sandwich_pdf(row["_RawBytes"], row["_FileExt"], row["_OcrText"])
                         zip_file.writestr(row["Zukünftiger DATEV-Dateiname"], sandwich_pdf_bytes)
