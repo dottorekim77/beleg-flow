@@ -54,8 +54,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.2 - Company Invoice Matching)")
-st.caption("결과창의 Ausgangs-INV 입력값이 파일명의 'INV-xxx' 파트로 실시간 연동 및 매핑되는 튜닝 버전입니다.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.4 - Standard Date-First Mode)")
+st.caption("독일 실무 표준(날짜_판매점_가격_인보이스)에 맞춰 파일명 규칙을 최적화하고 가독성을 높인 버전입니다.")
 
 if st.button("🔄 시스템 캐시 및 메모리 강제 초기화 (먹통 해결용)"):
     st.cache_data.clear()
@@ -83,29 +83,28 @@ else:
     genai.configure(api_key=API_KEY)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BACKEND ENGINE & FILENAME BUILDER (수정 항목 반영)
+# BACKEND ENGINE & FILENAME BUILDER (추천안 B 표준 반영)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def sanitize_filename(text: str) -> str: 
     return _ILLEGAL_CHARS.sub("", text).strip()
 
-def build_datev_filename(row_no: int, date_str: str, ausgang_inv: str, vendor: str, brutto_eur: float) -> str:
+def build_datev_filename(date_str: str, vendor: str, brutto_eur: float, ausgang_inv: str) -> str:
     """
-    규격: RE-xxx_날짜_INV-우리회사인보이스번호_판매점_가격.pdf
+    규격: 날짜_판매점_가격_INV-우리회사인보이스번호.pdf (없으면 _INV 파트 통째로 소멸)
     """
-    re_part = f"RE-{int(row_no):03d}"
     d_clean = date_str.replace('-', '')
-    
-    # 사용자가 입력한 우리 회사 인보이스 번호를 파일명 매핑에 사용
-    if ausgang_inv and str(ausgang_inv).strip():
-        inv_part = f"INV-{sanitize_filename(str(ausgang_inv))}"
-    else:
-        inv_part = "INV-NONE"
-        
     v_clean = sanitize_filename(vendor).replace(" ", "")[:12]
-    p_part = f"{brutto_eur:.2f}EUR"
+    p_part  = f"{brutto_eur:.2f}EUR"
     
-    return f"{re_part}_{d_clean}_{inv_part}_{v_clean}_{p_part}.pdf"
+    base_name = f"{d_clean}_{v_clean}_{p_part}"
+    
+    # 우리 회사 인보이스 번호가 실재할 때만 접두사를 붙여 세그먼트 확장
+    if ausgang_inv and str(ausgang_inv).strip() and str(ausgang_inv).lower() != "none":
+        inv_part = f"_INV-{sanitize_filename(str(ausgang_inv))}"
+        return f"{base_name}{inv_part}.pdf"
+    
+    return f"{base_name}.pdf"
 
 def ask_gemini_vision_direct(file_bytes: bytes, mime_type: str, skr_mode: str) -> tuple:
     fallback = ("", datetime.now().strftime("%Y-%m-%d"), "Fehler/Timeout", 0.0, "EUR", "", "AUTO_19", "No OCR text")
@@ -251,13 +250,12 @@ def on_table_edited() -> None:
         df.at[global_idx, "Vorsteuer 7%"]  = mwst_7
         df.at[global_idx, "Nettobetrag (Haben)"]    = netto
         
-        # 💡 사용자가 기입한 '🔗 Ausgangs-INV' 값을 추출하여 파일명에 주입 및 실시간 갱신
+        # 날짜 우선 표준 구조로 실시간 재생성 반영
         df.at[global_idx, "Zukünftiger DATEV-Dateiname"] = build_datev_filename(
-            global_idx, 
             str(df.at[global_idx, "Rechnungsdatum"]), 
-            str(df.at[global_idx, "🔗 Ausgangs-INV"]),
             str(df.at[global_idx, "Verkäufer"]), 
-            brutto_eur
+            brutto_eur,
+            str(df.at[global_idx, "🔗 Ausgangs-INV"])
         )
     st.session_state.edited_receipts = df
 
@@ -328,7 +326,7 @@ with col_cfg2: selected_skr = st.radio("📋 Standardkontenrahmen (SKR)", option
 
 if uploaded_files:
     if not API_KEY:
-        st.warning("⚠️ Bitte geben Sie zuerst den Gemini API-Key ein, um die Belege zu analysieren.")
+        st.warning("⚠️ Bitte geben Sie zuerst den Gemini API-Key ein, um die Belege zu 분석합니다.")
         st.stop()
 
     batch_key = "".join(f.name for f in uploaded_files) + f"_{selected_skr}_{default_zahlart}"
@@ -357,8 +355,8 @@ if uploaded_files:
                 mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
                 is_cc_initial = (default_zahlart == "Kreditkarte")
 
-                # 최초 빌드 시에는 우리 회사 인보이스가 비어있으므로 빈 문자값("") 주입 -> INV-NONE 처리
-                generated_filename = build_datev_filename(current_row_no, date_str, "", vendor, total)
+                # 초기 로드 시에는 Ausgangs-INV가 비어있으므로 날짜_판매점_가격 구조로 빌드
+                generated_filename = build_datev_filename(date_str, vendor, total, "")
 
                 rows.append({
                     "Rechnungsdatum":  date_str,                  
