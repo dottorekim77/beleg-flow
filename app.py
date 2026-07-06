@@ -202,7 +202,6 @@ def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple[float, flo
     return mwst_19, mwst_7, round(brutto_eur - (mwst_19 + mwst_7), 2)
 
 def parse_bank_statement(uploaded_bank_files) -> list:
-    """Kontoauszug (CSV 또는 PDF)에서 내역 테이블을 빌드하는 백엔드 엔진"""
     bank_records = []
     for f in uploaded_bank_files:
         if f.name.lower().endswith(".csv"):
@@ -440,7 +439,7 @@ with tab2:
                 "Vorsteuer 7%": 0.0,
                 "Nettobetrag (Haben)": b_amount_abs,
                 "Zahlweg (DATEV)": default_zahlart,
-                "SKR_Konto": get_assigned_account(b["vendor"], selected_skr),  # 고정 문자열 키 변경
+                "SKR_Konto": get_assigned_account(b["vendor"], selected_skr),
                 "Steuerschlüssel": "AUTO_19",
                 "🔗 Ausgangs-INV": "",
                 "Zukünftiger DATEV-Dateiname": "",
@@ -452,7 +451,7 @@ with tab2:
             is_fixed = False
             for rule in fixed_rules:
                 if rule["keyword"].lower() in b["vendor"].lower() or rule["keyword"].lower() in b["info"].lower():
-                    row["SKR_Konto"] = f"{rule['code']} - {rule['label']}"  # 고정 문자열 키 변경
+                    row["SKR_Konto"] = f"{rule['code']} - {rule['label']}"
                     row["Status"] = "🔄 고정 지출 (Vertrag)"
                     row["Status_Flag"] = "fixed"
                     is_fixed = True
@@ -479,7 +478,7 @@ with tab2:
                         row["Steuerschlüssel"] = r["mwst_type"]
                         row["Status"] = "✅ 매칭 완료"
                         row["Status_Flag"] = "matched"
-                        row["SKR_Konto"] = get_assigned_account(r["vendor"], selected_skr)  # 고정 문자열 키 변경
+                        row["SKR_Konto"] = get_assigned_account(r["vendor"], selected_skr)
                         row["_FileExt"] = r["ext"]
                         row["_RawBytes"] = r["bytes"]
                         row["_OcrText"] = r["raw_text"]
@@ -500,7 +499,7 @@ with tab2:
                     "Beleg_Nr": r["beleg_nr"], "Buchungsdatum": r["datum"], "Begünstigter": r["vendor"],
                     "Konto 내역 금액": "-", "Bruttobetrag (EUR)": r["total"],
                     "USt/Vorsteuer 19%": mwst_19, "Vorsteuer 7%": mwst_7, "Nettobetrag (Haben)": netto,
-                    "Zahlweg (DATEV)": "Bar", "SKR_Konto": get_assigned_account(r["vendor"], selected_skr),  # 고정 문자열 키 변경
+                    "Zahlweg (DATEV)": "Bar", "SKR_Konto": get_assigned_account(r["vendor"], selected_skr),
                     "Steuerschlüssel": r["mwst_type"], "🔗 Ausgangs-INV": "", "Zukünftiger DATEV-Dateiname": fn,
                     "Status": "⚠️ 영수증만 존재", "Status_Flag": "receipt_only",
                     "_FileExt": r["ext"], "_RawBytes": r["bytes"], "_OcrText": r["raw_text"]
@@ -527,12 +526,8 @@ with tab3:
         m4.metric("❌ 증빙 누락 (내역만)", flags.get("missing", 0), delta_color="inverse")
         
         st.markdown("### 💡 실시간 전표 정정 테이블")
-        edited_df = st.data_editor(
-            df_m,
-            use_container_width=True, num_rows="fixed", height=400, key="matching_editor_key", on_change=on_matching_table_edited,
-            st.markdown("### 💡 실시간 전표 정정 테이블")
         
-        # 1. 안전하게 딕셔너리를 먼저 생성
+        # 1. 수집기 충돌을 원천 차단하기 위한 딕셔너리 사전 생성 및 기본 정의
         safe_config = {
             "Konto 내역 금액": st.column_config.TextColumn("Konto 내역 금액", disabled=True),
             "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%.2f EUR"),
@@ -545,13 +540,14 @@ with tab3:
             "_FileExt": None, "_RawBytes": None, "_OcrText": None, "Status_Flag": None
         }
         
-        # 2. 문제가 되는 SKR_Konto 컬럼 설정을 안전하게 문자열 포맷팅 없이 단순 할당
+        # 2. 동적 인자가 필요한 SKR_Konto 컬럼을 인덱서 방식을 통해 안전하게 추가 주입
         safe_config["SKR_Konto"] = st.column_config.TextColumn(
-            label=f"SKR_Konto ({selected_skr})", 
-            width="medium"
+            label=f"📊 {selected_skr}", 
+            width="medium", 
+            placeholder="Pruefung durch Steuerberater"
         )
-
-        # 3. data_editor에 주입
+        
+        # 3. 데이터 에디터에 주입
         edited_df = st.data_editor(
             df_m,
             use_container_width=True, 
@@ -559,7 +555,7 @@ with tab3:
             height=400, 
             key="matching_editor_key", 
             on_change=on_matching_table_edited,
-            column_config=safe_config  # 위에서 만든 safe_config 적용
+            column_config=safe_config
         )
         
         st.markdown("---")
