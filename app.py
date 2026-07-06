@@ -54,8 +54,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.1 - Custom Filename Mode)")
-st.caption("Ausgangs-INV를 파일명에서 완전히 배제하고, RE-xxx 및 INV-xxx 구조로 분류 명확성을 극대화한 버전입니다.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.2 - Company Invoice Matching)")
+st.caption("결과창의 Ausgangs-INV 입력값이 파일명의 'INV-xxx' 파트로 실시간 연동 및 매핑되는 튜닝 버전입니다.")
 
 if st.button("🔄 시스템 캐시 및 메모리 강제 초기화 (먹통 해결용)"):
     st.cache_data.clear()
@@ -89,13 +89,19 @@ else:
 def sanitize_filename(text: str) -> str: 
     return _ILLEGAL_CHARS.sub("", text).strip()
 
-def build_datev_filename(row_no: int, date_str: str, beleg_nr: str, vendor: str, brutto_eur: float) -> str:
+def build_datev_filename(row_no: int, date_str: str, ausgang_inv: str, vendor: str, brutto_eur: float) -> str:
     """
-    규격: RE-xxx_날짜_INV-xxx_판매점_가격.pdf (Ausgangs-INV는 완전 배제)
+    규격: RE-xxx_날짜_INV-우리회사인보이스번호_판매점_가격.pdf
     """
     re_part = f"RE-{int(row_no):03d}"
     d_clean = date_str.replace('-', '')
-    inv_part = f"INV-{sanitize_filename(beleg_nr)}" if beleg_nr and beleg_nr.lower() not in ("", "none") else "INV-NONE"
+    
+    # 사용자가 입력한 우리 회사 인보이스 번호를 파일명 매핑에 사용
+    if ausgang_inv and str(ausgang_inv).strip():
+        inv_part = f"INV-{sanitize_filename(str(ausgang_inv))}"
+    else:
+        inv_part = "INV-NONE"
+        
     v_clean = sanitize_filename(vendor).replace(" ", "")[:12]
     p_part = f"{brutto_eur:.2f}EUR"
     
@@ -245,11 +251,11 @@ def on_table_edited() -> None:
         df.at[global_idx, "Vorsteuer 7%"]  = mwst_7
         df.at[global_idx, "Nettobetrag (Haben)"]    = netto
         
-        # 💡 수정 발생 시에도 오직 고정된 규격으로만 파일명 재빌드 (🔗 Ausgangs-INV 제외)
+        # 💡 사용자가 기입한 '🔗 Ausgangs-INV' 값을 추출하여 파일명에 주입 및 실시간 갱신
         df.at[global_idx, "Zukünftiger DATEV-Dateiname"] = build_datev_filename(
             global_idx, 
             str(df.at[global_idx, "Rechnungsdatum"]), 
-            str(df.at[global_idx, "Beleg_Nr"]),
+            str(df.at[global_idx, "🔗 Ausgangs-INV"]),
             str(df.at[global_idx, "Verkäufer"]), 
             brutto_eur
         )
@@ -351,8 +357,8 @@ if uploaded_files:
                 mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
                 is_cc_initial = (default_zahlart == "Kreditkarte")
 
-                # 💡 최초 파일 생성 시 순번(current_row_no)을 주입하여 RE-xxx 기반 파일명 생성
-                generated_filename = build_datev_filename(current_row_no, date_str, beleg_nr, vendor, total)
+                # 최초 빌드 시에는 우리 회사 인보이스가 비어있으므로 빈 문자값("") 주입 -> INV-NONE 처리
+                generated_filename = build_datev_filename(current_row_no, date_str, "", vendor, total)
 
                 rows.append({
                     "Rechnungsdatum":  date_str,                  
@@ -406,9 +412,9 @@ if uploaded_files:
             on_change=on_table_edited,
             column_config={
                 "Rechnungsdatum":  st.column_config.TextColumn("📅 Rechnungsdatum", width="small"),
-                "🔗 Ausgangs-INV":  st.column_config.TextColumn("🔗 Ausgangs-INV (기록용)", width="medium"),
+                "🔗 Ausgangs-INV":  st.column_config.TextColumn("🔗 Ausgangs-INV (우리회사 인보이스)", width="medium"),
                 "Verkäufer":        st.column_config.TextColumn("Verkäufer", width="medium"),
-                "Beleg_Nr":        st.column_config.TextColumn("Beleg_Nr", width="medium"),
+                "Beleg_Nr":        st.column_config.TextColumn("Beleg_Nr (구매영수증번호)", width="medium"),
                 "Beleg-Soll (Orig.)":    st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True, width="small"), 
                 "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €", width="small"),
                 "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳 CC"),
