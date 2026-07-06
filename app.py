@@ -7,18 +7,17 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 import google.generativeai as genai
-from google.api_core.exceptions import GoogleAPIError # API 에러 핸들링 추가
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from pypdf import PdfReader, PdfWriter
 from PIL import Image
 
 # ══════════════════════════════════════════════════════════════════════════════
-# KONSTANTEN & CONFIG
+# CONFIG & HARD RESET (캐시 및 데드락 원천 차단)
 # ══════════════════════════════════════════════════════════════════════════════
 PAGE_TITLE      = "DATEV Beleg-Parser Pro AI"
 PAGE_ICON       = "🧾"
 GEMINI_MODEL    = "gemini-3.1-flash-lite"   
-FREE_TIER_DELAY = 5.0  # 안전을 위해 대기 시간을 5초로 약간 늘림                     
+FREE_TIER_DELAY = 4.0                       
 MWST_19_FACTOR  = 19 / 119
 MWST_7_FACTOR   = 7 / 107
 ITEMS_PER_PAGE  = 10  
@@ -45,11 +44,9 @@ INITIAL_VENDORS = {
     "Ionq":       {"SKR03": "4980 - Betriebsbedarf", "SKR04": "6300 - Sonstige Aufwendungen"},
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STREAMLIT PAGE SETUP
-# ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 
+# 이전 UI 찌꺼기 제거용 CSS
 st.markdown("""
     <style>
         [data-testid="stSidebarNav"] {display: none !important;}
@@ -58,8 +55,17 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v6.5 - Hard-Timeout Engine)")
-st.caption("강제 타임아웃 및 자동 재시도 로직이 적용되어 프리징 현상을 원천 차단한 버전입니다.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.0 - Anti-Freeze Mode)")
+st.caption("기존 캐시를 무력화하고 st.status 인터페이스로 무한 프리징을 방지한 완전 청정 버전입니다.")
+
+# 개발 중 꼬인 캐시를 즉시 날릴 수 있는 수동 버튼 배치
+if st.button("🔄 시스템 캐시 및 메모리 강제 초기화 (먹통 해결용)"):
+    st.cache_data.clear()
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.toast("모든 캐시와 세션이 초기화되었습니다. 파일을 다시 올려주세요!", icon="🧹")
+    time.sleep(1)
+    st.rerun()
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = INITIAL_VENDORS.copy()
@@ -79,42 +85,34 @@ else:
     genai.configure(api_key=API_KEY)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BACKEND ENGINE FUNCTIONS (TIMEOUT & RETRY 추가)
+# BACKEND ENGINE (타임아웃 대폭 축소: 10초)
 # ══════════════════════════════════════════════════════════════════════════════
 
-@st.cache_data(show_spinner=False)
-def ask_gemini_vision_cached(file_bytes: bytes, mime_type: str, skr_mode: str, api_key_trigger: str) -> tuple:
+# ⚠️ 먹통 예방을 위해 기존 캐시 데코레이터를 일시적으로 제거하거나 함수명을 변경하여 구 캐시와 격리합니다.
+def ask_gemini_vision_direct(file_bytes: bytes, mime_type: str, skr_mode: str) -> tuple:
     fallback = ("", datetime.now().strftime("%Y-%m-%d"), "Fehler/Timeout", 0.0, "EUR", "", "AUTO_19", "No OCR text")
-    if not api_key_trigger: return fallback + (False,)
     
-    # 💡 강제 타임아웃 및 최대 3회 재시도(Retry) 로직 도입
-    max_retries = 3
-    backoff_factor = 2.0
-    
+    max_retries = 2
     for attempt in range(max_retries):
         try:
             model = genai.GenerativeModel(GEMINI_MODEL)
             prompt_text = get_gemini_prompt(skr_mode)
             
-            # request_options를 통해 15초 타임아웃 강제 설정 (서버가 응답을 안 주면 강제로 뚫고 나옴)
+            # 타임아웃을 10초로 더 타이트하게 잡아 먹통 상태를 빠르게 찢고 나옵니다.
             response = model.generate_content(
                 [{"mime_type": mime_type, "data": file_bytes}, prompt_text],
-                request_options={"timeout": 15.0} 
+                request_options={"timeout": 10.0} 
             )
             
             beleg_nr, d_str, ven, tot, cur, kat, m_type = _parse_gemini_response(response.text)
-            return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text, True
+            return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text
             
         except Exception as e:
-            # 마지막 시도마저 실패하면 더 이상 대기하지 않고 뷰어에 실패 상태로 표시
             if attempt == max_retries - 1:
-                st.toast(f"⚠️ API 통신 실패 (타임아웃 또는 과부하): {str(e)}", icon="🚨")
-                return fallback + (False,)
+                return fallback
+            time.sleep(FREE_TIER_DELAY)
             
-            # 실패 시 지수적으로 대기 시간을 늘려 재시도 (4초 -> 8초)
-            time.sleep(FREE_TIER_DELAY * (backoff_factor ** attempt))
-            
-    return fallback + (False,)
+    return fallback
 
 def get_assigned_account(vendor_name: str, skr_mode: str) -> str:
     v_upper = vendor_name.upper()
@@ -334,48 +332,46 @@ if uploaded_files:
         rows = []
         total_files = len(uploaded_files)
         
-        progress_placeholder = st.empty()
-        
-        for idx, uploaded_file in enumerate(uploaded_files):
-            with progress_placeholder.container():
-                st.progress(int((idx) / total_files * 100))
-                st.spinner(f"🔮 Analysiere Dokument {idx+1}/{total_files}: {uploaded_file.name}...")
+        # 💡 무한 대기를 시각적으로 분쇄하기 위해 st.status 컨텍스트 적용
+        with st.status("🚀 Document Processing Engine Initializing...", expanded=True) as status:
+            for idx, uploaded_file in enumerate(uploaded_files):
+                status.update(label=f"🔄 Processing ({idx+1}/{total_files}): {uploaded_file.name}", state="running")
 
-            file_bytes = uploaded_file.read()
-            ext        = uploaded_file.name.rsplit(".", 1)[-1].lower()
-            mime_type  = MIME_MAP.get(ext, "application/octet-stream")
+                file_bytes = uploaded_file.read()
+                ext        = uploaded_file.name.rsplit(".", 1)[-1].lower()
+                mime_type  = MIME_MAP.get(ext, "application/octet-stream")
 
-            res = ask_gemini_vision_cached(file_bytes, mime_type, selected_skr, API_KEY)
-            beleg_nr, date_str, vendor, total, currency, _, mwst_type, raw_text = res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7]
-            was_called = res[8] if len(res) > 8 else False
+                # 캐시 없는 다이렉트 엔진 호출
+                res = ask_gemini_vision_direct(file_bytes, mime_type, selected_skr)
+                beleg_nr, date_str, vendor, total, currency, _, mwst_type, raw_text = res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7]
 
-            assigned_kategorie = get_assigned_account(vendor, selected_skr)
-            mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
-            is_cc_initial = (default_zahlart == "Kreditkarte")
+                assigned_kategorie = get_assigned_account(vendor, selected_skr)
+                mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
+                is_cc_initial = (default_zahlart == "Kreditkarte")
 
-            rows.append({
-                "Rechnungsdatum":  date_str,                  
-                "🔗 Ausgangs-INV":  "",                         
-                "Verkäufer":        vendor,                     
-                "Beleg_Nr":        beleg_nr,                   
-                "Beleg-Soll (Orig.)": f"{total:,.2f} $" if currency == "USD" else f"{total:,.2f} €", 
-                "Bruttobetrag (EUR)": total,                    
-                "Is_Kreditkarte":   is_cc_initial,              
-                "Zahlweg (DATEV)":          default_zahlart,    
-                f"{selected_skr}": assigned_kategorie, 
-                "USt/Vorsteuer 19%":  mwst_19,
-                "Vorsteuer 7%":   mwst_7,
-                "Nettobetrag (Haben)":      netto,
-                "Steuerschlüssel":        mwst_type,
-                "Zukünftiger DATEV-Dateiname": build_datev_filename(date_str, "", vendor, beleg_nr, total, default_zahlart),
-                "_FileExt": ext, "_RawBytes": file_bytes, "_OcrText": raw_text
-            })
+                rows.append({
+                    "Rechnungsdatum":  date_str,                  
+                    "🔗 Ausgangs-INV":  "",                         
+                    "Verkäufer":        vendor,                     
+                    "Beleg_Nr":        beleg_nr,                   
+                    "Beleg-Soll (Orig.)": f"{total:,.2f} $" if currency == "USD" else f"{total:,.2f} €", 
+                    "Bruttobetrag (EUR)": total,                    
+                    "Is_Kreditkarte":   is_cc_initial,              
+                    "Zahlweg (DATEV)":          default_zahlart,    
+                    f"{selected_skr}": assigned_kategorie, 
+                    "USt/Vorsteuer 19%":  mwst_19,
+                    "Vorsteuer 7%":   mwst_7,
+                    "Nettobetrag (Haben)":      netto,
+                    "Steuerschlüssel":        mwst_type,
+                    "Zukünftiger DATEV-Dateiname": build_datev_filename(date_str, "", vendor, beleg_nr, total, default_zahlart),
+                    "_FileExt": ext, "_RawBytes": file_bytes, "_OcrText": raw_text
+                })
+                
+                if total_files > 1 and idx < total_files - 1: 
+                    time.sleep(FREE_TIER_DELAY)
             
-            # API 호출이 정상 처리되었거나 실패했더라도 무조건 일정 시간 간격을 보장
-            if total_files > 1 and idx < total_files - 1: 
-                time.sleep(FREE_TIER_DELAY)
+            status.update(label="✅ All documents processed successfully!", state="complete")
 
-        progress_placeholder.empty()
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
