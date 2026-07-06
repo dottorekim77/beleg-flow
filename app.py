@@ -546,7 +546,7 @@ with tab3:
             df_m,
             use_container_width=True, num_rows="fixed", height=400, key="matching_editor_key", on_change=on_matching_table_edited,
             column_config={
-                f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium", placeholder="👉 세무사 검토용 빈칸 유지가능"),
+                f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium", placeholder="Pruefung durch Steuerberater"),
                 "Konto 내역 금액": st.column_config.TextColumn("Konto 내역 금액", disabled=True),
                 "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €"),
                 "USt/Vorsteuer 19%": st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
