@@ -184,23 +184,37 @@ def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple[float, flo
 
 def parse_bank_statement(uploaded_bank_files) -> list:
     bank_records = []
+    if not uploaded_bank_files:
+        # 💡 파일이 아예 없을 때만 가동하는 안전한 데모 데이터
+        return [
+            {"datum": "2026-06-15", "amount": -45.90, "vendor": "Amazon.de", "info": "Bestellung 302-11"},
+            {"datum": "2026-06-16", "amount": -120.00, "vendor": "Aral Krefeld", "info": "Tankstelle"},
+            {"datum": "2026-06-02", "amount": -34.99, "vendor": "Vodafone GmbH", "info": "Dauerauftrag Rechn."},
+            {"datum": "2026-06-05", "amount": -850.00, "vendor": "Immobilien Krefeld", "info": "Miete Juni"},
+            {"datum": "2026-06-20", "amount": -89.00, "vendor": "Adobe Systems", "info": "Creative Cloud"},
+        ]
+
     for f in uploaded_bank_files:
         if f.name.lower().endswith(".csv"):
             try:
                 df_b = pd.read_csv(f, sep=None, engine='python', encoding='utf-8-sig')
             except Exception:
                 f.seek(0)
-                df_b = pd.read_csv(f, sep=None, engine='python', encoding='latin1')
+                try:
+                    df_b = pd.read_csv(f, sep=None, engine='python', encoding='latin1')
+                except Exception:
+                    continue
             
             rename_map = {}
             for col in df_b.columns:
                 c_lbl = str(col).lower()
-                if "datum" in c_lbl or "valuta" in c_lbl or "buchungstag" in c_lbl: rename_map[col] = "datum"
-                elif "betrag" in c_lbl or "umsatz" in c_lbl or "amount" in c_lbl: rename_map[col] = "amount"
-                elif "begünstigter" in c_lbl or "empfänger" in c_lbl or "name" in c_lbl: rename_map[col] = "vendor"
-                elif "zweck" in c_lbl or "text" in c_lbl: rename_map[col] = "info"
+                # 독일 은행권 CSV 헤더 매핑 규칙 대폭 확장
+                if any(k in c_lbl for k in ["datum", "valuta", "buchungstag", "tag"]): rename_map[col] = "datum"
+                elif any(k in c_lbl for k in ["betrag", "umsatz", "amount", "wert"]): rename_map[col] = "amount"
+                elif any(k in c_lbl for k in ["begünstigter", "empfänger", "name", "zahlun", "vendor"]): rename_map[col] = "vendor"
+                elif any(k in c_lbl for k in ["zweck", "text", "info", "verwendungs"]): rename_map[col] = "info"
             
-            if rename_map:
+            if "amount" in rename_map.values():
                 df_b = df_b.rename(columns=rename_map)
                 for _, r in df_b.iterrows():
                     try:
@@ -238,14 +252,6 @@ def parse_bank_statement(uploaded_bank_files) -> list:
                             })
             except Exception: pass
             
-    if not bank_records:
-        bank_records = [
-            {"datum": "2026-06-15", "amount": -45.90, "vendor": "Amazon.de", "info": "Bestellung 302-11"},
-            {"datum": "2026-06-16", "amount": -120.00, "vendor": "Aral Krefeld", "info": "Tankstelle"},
-            {"datum": "2026-06-02", "amount": -34.99, "vendor": "Vodafone GmbH", "info": "Dauerauftrag Rechn."},
-            {"datum": "2026-06-05", "amount": -850.00, "vendor": "Immobilien Krefeld", "info": "Miete Juni"},
-            {"datum": "2026-06-20", "amount": -89.00, "vendor": "Adobe Systems", "info": "Creative Cloud"},
-        ]
     return bank_records
 
 # ==============================================================================
@@ -464,9 +470,12 @@ with tab2:
                     "_FileExt": r["ext"], "_RawBytes": r["bytes"], "_OcrText": r["raw_text"]
                 })
                 
-        st.session_state.matching_result = pd.DataFrame(final_rows, index=range(1, len(final_rows) + 1))
-        st.session_state.matching_result.index.name = "Nr."
-        st.success("🤖 대조 작업이 완료되었습니다! 3번째 탭에서 최종 결과를 확인하고 다운로드하세요.")
+        if len(final_rows) == 0:
+            st.info("업로드된 파일에서 유효한 회계 데이터를 찾을 수 없습니다. CSV 형식 또는 파일 내용을 확인해 주세요.")
+        else:
+            st.session_state.matching_result = pd.DataFrame(final_rows, index=range(1, len(final_rows) + 1))
+            st.session_state.matching_result.index.name = "Nr."
+            st.success("🤖 대조 작업이 완료되었습니다! 3번째 탭에서 최종 결과를 확인하고 다운로드하세요.")
 
 # --- TAB 3: 최종 검토 및 DATEV 내보내기 ---
 with tab3:
@@ -486,7 +495,6 @@ with tab3:
         
         st.markdown("### 💡 실시간 전표 정정 테이블")
         
-        # 🔗 [원천 해결] 추가 속성(width, placeholder)을 아예 제거하여 메트릭 수집기 우회
         safe_config = {
             "Konto 내역 금액": st.column_config.TextColumn("Konto 내역 금액", disabled=True),
             "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%.2f EUR"),
@@ -500,7 +508,6 @@ with tab3:
             "_FileExt": None, "_RawBytes": None, "_OcrText": None, "Status_Flag": None
         }
         
-        # 데이터 에디터 렌더링
         edited_df = st.data_editor(
             df_m,
             use_container_width=True, 
