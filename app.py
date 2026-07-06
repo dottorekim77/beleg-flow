@@ -12,15 +12,15 @@ from pypdf import PdfReader, PdfWriter
 from PIL import Image
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CONFIG & HARD RESET (1번, 8번 반영)
+# CONFIG & HARD RESET
 # ══════════════════════════════════════════════════════════════════════════════
 PAGE_TITLE      = "DATEV Beleg-Parser Pro AI"
 PAGE_ICON       = "🧾"
-GEMINI_MODEL    = "gemini-1.5-flash"   # [수정 1] 존재하지 않는 3.1 대신 안정적인 1.5 모델로 고정
+GEMINI_MODEL    = "gemini-1.5-flash"   # 안정적인 기본 모델 사용
 FREE_TIER_DELAY = 4.0                       
 MWST_19_FACTOR  = 19 / 119
 MWST_7_FACTOR   = 7 / 107
-ITEMS_PER_PAGE  = 10                   # [수정 8] 페이지네이션 상수 선언
+ITEMS_PER_PAGE  = 10  
 
 MIME_MAP = {
     "pdf":  "application/pdf",
@@ -29,7 +29,7 @@ MIME_MAP = {
     "png":  "image/png",
 }
 
-ZAHLART_OPTIONS = ["Firmenkonto", "Kreditkarte"]  # [수정 2] "Mastercard" 제거 후 "Kreditkarte"로 통일
+ZAHLART_OPTIONS = ["Firmenkonto", "Kreditkarte"]
 Z_CODE_MAP      = {"Firmenkonto": "BANK", "Kreditkarte": "CC"}
 
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
@@ -44,16 +44,6 @@ INITIAL_VENDORS = {
     "Ionq":       {"SKR03": "4980 - Betriebsbedarf", "SKR04": "6300 - Sonstige Aufwendungen"},
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# API AUTHENTIFIZIERUNG (인증 흐름 완전 캡슐화 및 예외 방지)
-# ══════════════════════════════════════════════════════════════════════════════
-# 1. 소스코드 직접 대입용 변수 선언
-API_KEY = "여기에_실제_Gemini_API_키를_넣으세요" 
-
-# 2. 위 항목이 기본값 상태라면 Streamlit Secrets 혹은 환경 변수 우선 추적
-if not API_KEY or API_KEY == "여기에_실제_Gemini_API_키를_넣으세요":
-    API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 
 st.markdown("""
@@ -64,24 +54,38 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v8.5 - 완전 수정본)")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v7.6 - Pure German Format Mode)")
 st.caption("BWA 및 DATEV 지침에 맞게 모든 금액 표시와 파일명을 독일식(1.234,56)으로 전면 수정한 버전입니다.")
 
-# 만약 API 키가 상단에서 정의되지 못했다면 화면 메인에 입력 폼 배치 후 실행 제어
+# ══════════════════════════════════════════════════════════════════════════════
+# API AUTHENTIFIZIERUNG (안전한 최상단 인증 처리)
+# ══════════════════════════════════════════════════════════════════════════════
+# 1. 여기에 실제 발급받으신 Gemini API 키를 입력하세요.
+API_KEY = "여기에_실제_Gemini_API_키를_넣으세요" 
+
+# 2. 하드코딩 키가 비어있다면 Streamlit Secrets에서 로드 시도
+if not API_KEY or API_KEY == "여기에_실제_Gemini_API_키를_넣으세요":
+    API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+
+# 3. 비밀번호 입력 창  fallback (Secrets나 하드코딩 키가 둘 다 없을 때만 표시)
 if not API_KEY or API_KEY == "여기에_실제_Gemini_API_키를_넣으세요":
     API_KEY = st.text_input("🔑 Gemini API-Key eingeben", type="password", key="main_api_key_input")
     if not API_KEY:
-        st.error("🚨 API Key를 입력해주셔야 시스템이 작동합니다.")
+        st.warning("⚠️ 시스템을 작동하려면 Gemini API 키를 입력하거나 소스 코드에 설정해 주세요.")
         st.stop()
 
+# 구글 Generative AI 모듈 초기화
 genai.configure(api_key=API_KEY)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# CACHE & STATE RESET
+# ══════════════════════════════════════════════════════════════════════════════
 if st.button("🔄 시스템 캐시 및 메모리 강제 초기화 (먹통 해결용)"):
     st.cache_data.clear()
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.toast("모든 캐시와 세션이 초기화되었습니다. 파일을 다시 올려주세요!", icon="🧹")
-    time.sleep(0.5)
+    time.sleep(1)
     st.rerun()
 
 if "custom_rules" not in st.session_state:
@@ -105,7 +109,7 @@ def to_german_amount_str(val: float) -> str:
         return "0,00"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BACKEND ENGINE & FILENAME BUILDER (3번 반영)
+# BACKEND ENGINE & FILENAME BUILDER
 # ══════════════════════════════════════════════════════════════════════════════
 def sanitize_filename(text: str) -> str: 
     return _ILLEGAL_CHARS.sub("", text).strip()
@@ -119,31 +123,30 @@ def build_datev_filename(date_str: str, vendor: str, brutto_eur: float, ausgang_
     if ausgang_inv and str(ausgang_inv).strip() and str(ausgang_inv).lower() != "none":
         inv_part = f"_INV-{sanitize_filename(str(ausgang_inv))}"
         return f"{base_name}{inv_part}.pdf"
+    
     return f"{base_name}.pdf"
 
 def ask_gemini_vision_direct(file_bytes: bytes, mime_type: str, skr_mode: str) -> tuple:
-    """[수정 3] 타임아웃 10초 명시 및 에러 시 무한 대기 차단 후 최대 2회 재시도"""
     fallback = ("", datetime.now().strftime("%Y-%m-%d"), "Fehler/Timeout", 0.0, "EUR", "", "AUTO_19", "No OCR text")
     
     max_retries = 2
-    for attempt in range(max_retries + 1):
+    for attempt in range(max_retries):
         try:
             model = genai.GenerativeModel(GEMINI_MODEL)
             prompt_text = get_gemini_prompt(skr_mode)
             
             response = model.generate_content(
                 [{"mime_type": mime_type, "data": file_bytes}, prompt_text],
-                request_options={"timeout": 10.0}  # 10초 타임아웃 제한
+                request_options={"timeout": 10.0} 
             )
             
             beleg_nr, d_str, ven, tot, cur, kat, m_type = _parse_gemini_response(response.text)
             return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text
             
         except Exception:
-            if attempt < max_retries:
-                time.sleep(2.0)
-                continue
-            return fallback
+            if attempt == max_retries - 1:
+                return fallback
+            time.sleep(FREE_TIER_DELAY)
             
     return fallback
 
@@ -240,7 +243,7 @@ def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple[float, flo
     return mwst_19, mwst_7, round(brutto_eur - (mwst_19 + mwst_7), 2)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# REKALKULATION & EXPORT (4번, 5번, 6번 반영)
+# REKALKULATION & EXPORT
 # ══════════════════════════════════════════════════════════════════════════════
 def on_table_edited() -> None:
     edit_state  = st.session_state.get("beleg_editor_key", {})
@@ -257,11 +260,10 @@ def on_table_edited() -> None:
         for col, new_val in changes.items(): 
             df.at[global_idx, col] = new_val
 
-        # [수정 4, 5] Is_Kreditkarte 컬럼 변경 감지 시 정확한 컬럼명인 "Zahlart"의 상태 동기화 토글 처리
         if "Is_Kreditkarte" in changes:
-            df.at[global_idx, "Zahlart"] = "Kreditkarte" if changes["Is_Kreditkarte"] else "Firmenkonto"
+            df.at[global_idx, "Zahlweg (DATEV)"] = "Kreditkarte" if changes["Is_Kreditkarte"] else "Firmenkonto"
 
-        brutto_eur = float(df.at[global_idx, "Gebuchter Bruttobetrag (EUR)"]) # [수정 4] 매칭 컬럼명 동기화
+        brutto_eur = float(df.at[global_idx, "Bruttobetrag (EUR)"])
         mwst_19, mwst_7, netto = calculate_tax_details(brutto_eur, str(df.at[global_idx, "Steuerschlüssel"]))
         df.at[global_idx, "USt/Vorsteuer 19%"] = mwst_19
         df.at[global_idx, "Vorsteuer 7%"]  = mwst_7
@@ -278,7 +280,6 @@ def on_table_edited() -> None:
 def build_excel_bytes(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        # [수정 6] 엑셀 export 시 내부용 가상 필드와 "Is_Kreditkarte" 체크박스 전용 열을 깨끗이 drop
         df_clean = df.drop(columns=["_FileExt", "_RawBytes", "_OcrText", "Is_Kreditkarte"], errors="ignore")
         df_clean.to_excel(writer, sheet_name="DATEV_Export", index=True)
         ws = writer.sheets["DATEV_Export"]
@@ -341,7 +342,9 @@ with col_cfg1: default_zahlart = st.radio("💳 Standard-Zahlweg (DATEV)", optio
 with col_cfg2: selected_skr = st.radio("📋 Standardkontenrahmen (SKR)", options=["SKR03", "SKR04"], index=1, horizontal=True)
 
 if uploaded_files:
-    # [수정 7] batch_key 구조 설계 시 무효화 캐시 대상에 누락되었던 default_zahlart 결합 추가
+    # [수정 완료] 기존 341번째 줄 근처의 'if not API_KEY:' 체크 구문을 제거했습니다.
+    # 상단에서 최우선으로 검증하므로 중복 체크가 불필요하며 구조적 에러를 차단합니다.
+
     batch_key = "".join(f.name for f in uploaded_files) + f"_{selected_skr}_{default_zahlart}"
     if st.session_state.get("last_batch_key") != batch_key:
         st.session_state.last_batch_key = batch_key
@@ -370,16 +373,15 @@ if uploaded_files:
 
                 generated_filename = build_datev_filename(date_str, vendor, total, "")
 
-                # [수정 4, 5] 신규 로드 딕셔너리 구조 내 컬럼명칭 수정 및 Is_Kreditkarte 컬럼 신규 배치 적용
                 rows.append({
                     "Rechnungsdatum":  date_str,                  
                     "🔗 Ausgangs-INV":  "",                         
                     "Verkäufer":        vendor,                     
                     "Beleg_Nr":        beleg_nr,                   
                     "Beleg-Soll (Orig.)": f"{to_german_amount_str(total)} $" if currency == "USD" else f"{to_german_amount_str(total)} €", 
-                    "Gebuchter Bruttobetrag (EUR)": total,           # 컬럼명 수정 (4번)
-                    "Is_Kreditkarte":   is_cc_initial,               # 필드 추가 (5번)
-                    "Zahlart":          default_zahlart,             # 컬럼명 수정 (4번)
+                    "Bruttobetrag (EUR)": total,                    
+                    "Is_Kreditkarte":   is_cc_initial,              
+                    "Zahlweg (DATEV)":          default_zahlart,    
                     f"{selected_skr}": assigned_kategorie, 
                     "USt/Vorsteuer 19%":  mwst_19,
                     "Vorsteuer 7%":   mwst_7,
@@ -397,7 +399,7 @@ if uploaded_files:
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
-    # 🔄 DATA EDITOR WITH PAGINATION (8번 반영)
+    # 🔄 DATA EDITOR WITH PAGINATION
     @st.fragment
     def render_isolated_data_editor():
         df = st.session_state.edited_receipts
@@ -415,7 +417,6 @@ if uploaded_files:
 
         st.markdown(f"**📋 Belege bearbeiten (Seite {page + 1} von {max_pages} — Gesamt: {total_rows} Einträge)**")
 
-        # [수정 4, 5] 데이터 에디터 config 명세 내 타겟 컬럼 이름 동기화 적용
         st.data_editor(
             df_page,
             use_container_width=True, 
@@ -428,9 +429,9 @@ if uploaded_files:
                 "Verkäufer":        st.column_config.TextColumn("Verkäufer", width="medium"),
                 "Beleg_Nr":        st.column_config.TextColumn("Beleg_Nr (구매영수증번호)", width="medium"),
                 "Beleg-Soll (Orig.)":    st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True, width="small"), 
-                "Gebuchter Bruttobetrag (EUR)": st.column_config.NumberColumn("Gebuchter Bruttobetrag (EUR)", format="%.2f €", width="small"), # 수정 4
-                "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳 CC"), # 수정 5
-                "Zahlart":          st.column_config.TextColumn("Zahlart", disabled=True, width="small"), # 수정 4
+                "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%.2f €", width="small"), 
+                "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳 CC"),
+                "Zahlweg (DATEV)":         st.column_config.TextColumn("Zahlweg (DATEV)", disabled=True, width="small"),
                 f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium"),
                 "USt/Vorsteuer 19%":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%.2f €"),
                 "Vorsteuer 7%":   st.column_config.NumberColumn("Vorsteuer 7%", format="%.2f €"),
@@ -441,7 +442,6 @@ if uploaded_files:
             },
         )
         
-        # [수정 8] 하단 페이지 이동 전용 버튼 및 컴포넌트 마크다운 구현
         p_col1, p_col2, p_col3 = st.columns([1, 4, 1])
         with p_col1:
             if st.button("⬅️ Vorherige", disabled=(page == 0), use_container_width=True):
