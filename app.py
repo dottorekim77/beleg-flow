@@ -7,6 +7,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 import google.generativeai as genai
+from google.api_core.exceptions import GoogleAPIError # API 에러 핸들링 추가
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from pypdf import PdfReader, PdfWriter
 from PIL import Image
@@ -17,7 +18,7 @@ from PIL import Image
 PAGE_TITLE      = "DATEV Beleg-Parser Pro AI"
 PAGE_ICON       = "🧾"
 GEMINI_MODEL    = "gemini-3.1-flash-lite"   
-FREE_TIER_DELAY = 4.2                        
+FREE_TIER_DELAY = 5.0  # 안전을 위해 대기 시간을 5초로 약간 늘림                     
 MWST_19_FACTOR  = 19 / 119
 MWST_7_FACTOR   = 7 / 107
 ITEMS_PER_PAGE  = 10  
@@ -57,8 +58,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v6.0 - Anti-Freeze Engine)")
-st.caption("Automatisierte Belegfassung mit optimierter Ratenbegrenzung. Verhindert das Einfrieren bei großen Dateimengen.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v6.5 - Hard-Timeout Engine)")
+st.caption("강제 타임아웃 및 자동 재시도 로직이 적용되어 프리징 현상을 원천 차단한 버전입니다.")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = INITIAL_VENDORS.copy()
@@ -78,21 +79,42 @@ else:
     genai.configure(api_key=API_KEY)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BACKEND ENGINE FUNCTIONS
+# BACKEND ENGINE FUNCTIONS (TIMEOUT & RETRY 추가)
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(show_spinner=False)
 def ask_gemini_vision_cached(file_bytes: bytes, mime_type: str, skr_mode: str, api_key_trigger: str) -> tuple:
-    fallback = ("", datetime.now().strftime("%Y-%m-%d"), "Unbekannt", 0.0, "EUR", "", "AUTO_19", "No OCR text")
-    if not api_key_trigger: return fallback
-    try:
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        prompt_text = get_gemini_prompt(skr_mode)
-        response = model.generate_content([{"mime_type": mime_type, "data": file_bytes}, prompt_text])
-        beleg_nr, d_str, ven, tot, cur, kat, m_type = _parse_gemini_response(response.text)
-        return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text, True
-    except Exception:
-        return fallback + (False,)
+    fallback = ("", datetime.now().strftime("%Y-%m-%d"), "Fehler/Timeout", 0.0, "EUR", "", "AUTO_19", "No OCR text")
+    if not api_key_trigger: return fallback + (False,)
+    
+    # 💡 강제 타임아웃 및 최대 3회 재시도(Retry) 로직 도입
+    max_retries = 3
+    backoff_factor = 2.0
+    
+    for attempt in range(max_retries):
+        try:
+            model = genai.GenerativeModel(GEMINI_MODEL)
+            prompt_text = get_gemini_prompt(skr_mode)
+            
+            # request_options를 통해 15초 타임아웃 강제 설정 (서버가 응답을 안 주면 강제로 뚫고 나옴)
+            response = model.generate_content(
+                [{"mime_type": mime_type, "data": file_bytes}, prompt_text],
+                request_options={"timeout": 15.0} 
+            )
+            
+            beleg_nr, d_str, ven, tot, cur, kat, m_type = _parse_gemini_response(response.text)
+            return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text, True
+            
+        except Exception as e:
+            # 마지막 시도마저 실패하면 더 이상 대기하지 않고 뷰어에 실패 상태로 표시
+            if attempt == max_retries - 1:
+                st.toast(f"⚠️ API 통신 실패 (타임아웃 또는 과부하): {str(e)}", icon="🚨")
+                return fallback + (False,)
+            
+            # 실패 시 지수적으로 대기 시간을 늘려 재시도 (4초 -> 8초)
+            time.sleep(FREE_TIER_DELAY * (backoff_factor ** attempt))
+            
+    return fallback + (False,)
 
 def get_assigned_account(vendor_name: str, skr_mode: str) -> str:
     v_upper = vendor_name.upper()
@@ -312,11 +334,9 @@ if uploaded_files:
         rows = []
         total_files = len(uploaded_files)
         
-        # 💡 UI 고정 플레이스홀더를 사용하여 무한 프리징 방지
         progress_placeholder = st.empty()
         
         for idx, uploaded_file in enumerate(uploaded_files):
-            # 루프 돌 때마다 플레이스홀더 내부를 갱신하여 렌더링 충돌을 막음
             with progress_placeholder.container():
                 st.progress(int((idx) / total_files * 100))
                 st.spinner(f"🔮 Analysiere Dokument {idx+1}/{total_files}: {uploaded_file.name}...")
@@ -351,11 +371,11 @@ if uploaded_files:
                 "_FileExt": ext, "_RawBytes": file_bytes, "_OcrText": raw_text
             })
             
-            # 💡 대기 시간을 파일 분석 직후가 아닌 루프 마지막 단계로 재배치하여 안정성 확보
-            if was_called and total_files > 1 and idx < total_files - 1: 
+            # API 호출이 정상 처리되었거나 실패했더라도 무조건 일정 시간 간격을 보장
+            if total_files > 1 and idx < total_files - 1: 
                 time.sleep(FREE_TIER_DELAY)
 
-        progress_placeholder.empty() # 분석 완료 후 로딩 바 청소
+        progress_placeholder.empty()
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
@@ -387,7 +407,7 @@ if uploaded_files:
                 "Rechnungsdatum":  st.column_config.TextColumn("📅 Rechnungsdatum", width="small"),
                 "🔗 Ausgangs-INV":  st.column_config.TextColumn("🔗 Ausgangs-INV", width="medium"),
                 "Verkäufer":        st.column_config.TextColumn("Verkäufer", width="medium"),
-                "Beleg_Nr":        st.column_config.TextColumn("Beleg_Nr (영수증번호)", width="medium"),
+                "Beleg_Nr":        st.column_config.TextColumn("Beleg_Nr", width="medium"),
                 "Beleg-Soll (Orig.)":    st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True, width="small"), 
                 "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €", width="small"),
                 "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳 CC"),
