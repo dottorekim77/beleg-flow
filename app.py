@@ -35,16 +35,6 @@ Z_CODE_MAP      = {"Firmenkonto": "BANK", "Kreditkarte": "CC", "Bankeinzug": "BA
 
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 
-INITIAL_VENDORS = {
-    "Adobe":      {"SKR03": "4930 - Bürobedarf", "SKR04": "6815 - Bürobedarf"},
-    "Amazon":     {"SKR03": "4980 - Betriebsbedarf", "SKR04": "6300 - Sonstige Aufwendungen"},
-    "Google":     {"SKR03": "4930 - Bürobedarf", "SKR04": "6815 - Bürobedarf"},
-    "Shell":      {"SKR03": "4530 - Kfz-Betriebskosten", "SKR04": "6520 - Kfz-Betriebskosten"},
-    "Aral":       {"SKR03": "4530 - Kfz-Betriebskosten", "SKR04": "6520 - Kfz-Betriebskosten"},
-    "Telekom":    {"SKR03": "4920 - Telefon", "SKR04": "6805 - Telefon"},
-    "Ionq":       {"SKR03": "4980 - Betriebsbedarf", "SKR04": "6300 - Sonstige Aufwendungen"},
-}
-
 # ==============================================================================
 # STREAMLIT PAGE SETUP & CLEAN UI HACKS
 # ==============================================================================
@@ -62,8 +52,6 @@ st.title(f"{PAGE_ICON} Beleg-Flow: 영수증 & Kontoauszug 통합 AI 파서")
 st.caption("AI 기반 영수증 추출 데이터와 은행 계좌 내역(Kontoauszug)을 교차 대조하여 DATEV 및 세무사 제출용 매칭 전표를 생성합니다.")
 
 # Session State 초기화
-if "custom_rules" not in st.session_state:
-    st.session_state.custom_rules = INITIAL_VENDORS.copy()
 if "config" not in st.session_state:
     st.session_state.config = {
         "kontenrahmen": "SKR04",
@@ -99,13 +87,6 @@ def ask_gemini_vision_cached(file_bytes: bytes, mime_type: str, skr_mode: str, a
         return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text, True
     except Exception:
         return fallback + (False,)
-
-def get_assigned_account(vendor_name: str, skr_mode: str) -> str:
-    v_upper = vendor_name.upper()
-    for keyword, accounts in st.session_state.custom_rules.items():
-        if keyword.upper() in v_upper:
-            return accounts[skr_mode]
-    return ""
 
 def create_sandwich_pdf(file_bytes: bytes, ext: str, raw_ai_text: str) -> bytes:
     try:
@@ -277,9 +258,11 @@ def on_matching_table_edited() -> None:
     if not edited_rows: return
 
     df = st.session_state.matching_result.copy()
+
     for row_idx_str, changes in edited_rows.items():
         label = df.index[int(row_idx_str)]
-        for col, new_val in changes.items(): 
+        
+        for col, new_val in changes.items():
             df.at[label, col] = new_val
 
         brutto_val = float(df.at[label, "Bruttobetrag (EUR)"])
@@ -346,29 +329,6 @@ with tab1:
             st.session_state.config["fixed_expenses"] = fixed_expenses_text
             st.success("기본 설정이 저장되었습니다.")
 
-    st.markdown("---")
-    st.subheader("📝 Buchungsregeln verwalten (개별 공급업체 규칙)")
-    
-    with st.form("new_rule_form", clear_on_submit=True):
-        c1, c2, c3 = st.columns([2, 3, 3])
-        with c1: new_vendor = st.text_input("Vendor", placeholder="z.B. Apple")
-        with c2: new_skr03  = st.text_input("SKR03", placeholder="z.B. 4930")
-        with c3: new_skr04  = st.text_input("SKR04", placeholder="z.B. 6815")
-        if st.form_submit_button("💾 Regel speichern") and new_vendor:
-            st.session_state.custom_rules[new_vendor] = {"SKR03": new_skr03, "SKR04": new_skr04}
-            st.toast(f"💾 Regel für '{new_vendor}' erfolgreich gespeichert!")
-
-    if st.session_state.custom_rules:
-        for v in list(st.session_state.custom_rules.keys()):
-            r_col1, r_col2, r_col3, r_col4 = st.columns([2, 3, 3, 1])
-            with r_col1: st.text(v)
-            with r_col2: st.text(st.session_state.custom_rules[v]["SKR03"])
-            with r_col3: st.text(st.session_state.custom_rules[v]["SKR04"])
-            with r_col4: 
-                if st.button("❌ Löschen", key=f"del_{v}", use_container_width=True):
-                    del st.session_state.custom_rules[v]
-                    st.rerun()
-
 # --- TAB 2: 데이터 업로드 & AI 교차 매칭 엔진 ---
 with tab2:
     st.header("📁 데이터 소스 분할 업로드")
@@ -429,6 +389,7 @@ with tab2:
         for b in bank_pool:
             b_amount_abs = abs(b["amount"])
             
+            # 🛠️ [요청 반영] AI 추천 코드 또는 사전정의 하드코딩 제거 -> 수동 입력이 없을 시 빈 공백 지정
             row = {
                 "Beleg_Nr": "",
                 "Buchungsdatum": b["datum"],
@@ -439,7 +400,7 @@ with tab2:
                 "Vorsteuer 7%": 0.0,
                 "Nettobetrag (Haben)": b_amount_abs,
                 "Zahlweg (DATEV)": default_zahlart,
-                "SKR_Konto": get_assigned_account(b["vendor"], selected_skr),
+                "SKR_Konto": "", # 빈 값으로 시작 (세무사 확인용 기본값)
                 "Steuerschlüssel": "AUTO_19",
                 "🔗 Ausgangs-INV": "",
                 "Zukünftiger DATEV-Dateiname": "",
@@ -478,7 +439,6 @@ with tab2:
                         row["Steuerschlüssel"] = r["mwst_type"]
                         row["Status"] = "✅ 매칭 완료"
                         row["Status_Flag"] = "matched"
-                        row["SKR_Konto"] = get_assigned_account(r["vendor"], selected_skr)
                         row["_FileExt"] = r["ext"]
                         row["_RawBytes"] = r["bytes"]
                         row["_OcrText"] = r["raw_text"]
@@ -499,7 +459,7 @@ with tab2:
                     "Beleg_Nr": r["beleg_nr"], "Buchungsdatum": r["datum"], "Begünstigter": r["vendor"],
                     "Konto 내역 금액": "-", "Bruttobetrag (EUR)": r["total"],
                     "USt/Vorsteuer 19%": mwst_19, "Vorsteuer 7%": mwst_7, "Nettobetrag (Haben)": netto,
-                    "Zahlweg (DATEV)": "Bar", "SKR_Konto": get_assigned_account(r["vendor"], selected_skr),
+                    "Zahlweg (DATEV)": "Bar", "SKR_Konto": "", # 빈 값 지정
                     "Steuerschlüssel": r["mwst_type"], "🔗 Ausgangs-INV": "", "Zukünftiger DATEV-Dateiname": fn,
                     "Status": "⚠️ 영수증만 존재", "Status_Flag": "receipt_only",
                     "_FileExt": r["ext"], "_RawBytes": r["bytes"], "_OcrText": r["raw_text"]
@@ -527,7 +487,7 @@ with tab3:
         
         st.markdown("### 💡 실시간 전표 정정 테이블")
         
-        # 1. 수집기 충돌을 원천 차단하기 위한 딕셔너리 사전 생성 및 기본 정의
+        # 🔗 고정 키 문자열을 사용하여 안전한 딕셔너리 구조 생성
         safe_config = {
             "Konto 내역 금액": st.column_config.TextColumn("Konto 내역 금액", disabled=True),
             "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%.2f EUR"),
@@ -535,19 +495,13 @@ with tab3:
             "Vorsteuer 7%": st.column_config.NumberColumn("Vorsteuer 7%", format="%.2f EUR"),
             "Nettobetrag (Haben)": st.column_config.NumberColumn("Nettobetrag (Haben)", format="%.2f EUR"),
             "Zahlweg (DATEV)": st.column_config.SelectboxColumn("Zahlweg (DATEV)", options=ZAHLART_OPTIONS),
+            "SKR_Konto": st.column_config.TextColumn("SKR_Konto", width="medium", placeholder="Prüfung durch Steuerberater"),
             "Steuerschlüssel": st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"]),
             "Status": st.column_config.TextColumn("Status", disabled=True),
             "_FileExt": None, "_RawBytes": None, "_OcrText": None, "Status_Flag": None
         }
         
-        # 2. 동적 인자가 필요한 SKR_Konto 컬럼을 인덱서 방식을 통해 안전하게 추가 주입
-        safe_config["SKR_Konto"] = st.column_config.TextColumn(
-            label=f"📊 {selected_skr}", 
-            width="medium", 
-            placeholder="Pruefung durch Steuerberater"
-        )
-        
-        # 3. 데이터 에디터에 주입
+        # 데이터 에디터 렌더링
         edited_df = st.data_editor(
             df_m,
             use_container_width=True, 
@@ -567,7 +521,7 @@ with tab3:
             st.download_button(
                 label="📊 통합 부킹 리스트 Excel 다운로드 (.xlsx)",
                 data=build_excel_bytes(edited_df),
-                file_name=f"DATEV_{selected_skr}_MatchList_{today}.xlsx",
+                file_name=f"DATEV_MatchList_{today}.xlsx",
                 use_container_width=True
             )
         with col_dl2:
