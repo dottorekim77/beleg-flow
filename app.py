@@ -16,8 +16,8 @@ from PIL import Image
 # ══════════════════════════════════════════════════════════════════════════════
 PAGE_TITLE      = "DATEV Beleg-Parser Pro AI"
 PAGE_ICON       = "🧾"
-GEMINI_MODEL    = "gemini-2.0-flash"   # 유료 버전 효율을 극대화하는 최신 고성능 모델
-FREE_TIER_DELAY = 0.0                  # 유료 요금제이므로 요청 대기 지연 시간(Delay)을 0초로 단축하여 고속 처리
+GEMINI_MODEL    = "gemini-2.0-flash"   # 유료 티어 효율과 속도를 극대화하는 최신 고성능 모델
+FREE_TIER_DELAY = 0.0                  # 유료 요금제 연동을 기준으로 지연 시간(Delay)을 0초로 단축하여 초고속 처리
 MWST_19_FACTOR  = 19 / 119
 MWST_7_FACTOR   = 7 / 107
 ITEMS_PER_PAGE  = 10  
@@ -33,23 +33,20 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v9.0.1 - Syntax Fix)")
-st.caption("BWA 및 DATEV 지침에 맞게 모든 금액 표시와 파일명을 독일식(1.234,56)으로 전면 수정한 버전입니다.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v9.5.0 - Ultimate Unified)")
+st.caption("BWA 및 DATEV 지침에 맞게 모든 금액 표시와 파일명을 독일식(1.234,56)으로 완벽하게 처리하는 완성형 버전입니다.")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2. API AUTHENTIFIZIERUNG (결제된 Secrets 완전 자동 연동)
+# 2. API AUTHENTIFIZIERUNG (Secrets 자동 연동 및 안전한 백업)
 # ══════════════════════════════════════════════════════════════════════════════
-# Streamlit Cloud의 Advanced Settings -> Secrets에 등록된 키를 자동으로 매핑합니다.
 API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
-# 만약 Secrets 로드에 실패했을 경우를 대비한 안전한 백업 입력창 구성
 if not API_KEY:
     API_KEY = st.text_input("🔑 Gemini API-Key 입력 (Secrets 로드 실패시 직접 입력)", type="password", key="main_api_key_input")
     if not API_KEY:
         st.warning("⚠️ 시스템을 작동하려면 Streamlit Secrets에 GEMINI_API_KEY를 등록하거나 위 입력창에 키를 입력해야 합니다.")
         st.stop()
 
-# 구글 API 모듈 초기화 (인증 위치 최상단 단일화)
 genai.configure(api_key=API_KEY)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -313,7 +310,6 @@ with st.expander("📝 Buchungsregeln verwalten", expanded=False):
         
         submit_rule = st.form_submit_button("💾 Regel speichern")
         if submit_rule and new_vendor:
-            # [수정완료] 오타 'new_sk Bert15'를 정상적인 변수명인 'new_skr04'로 완벽하게 수정했습니다.
             st.session_state.custom_rules[new_vendor] = {"SKR03": new_skr03, "SKR04": new_skr04}
             st.toast(f"💾 Regel für '{new_vendor}' erfolgreich gespeichert!")
 
@@ -408,4 +404,58 @@ if uploaded_files:
         
         df_page = df.iloc[start_idx:end_idx]
 
-        st.markdown(f"**📋 Belege bearbeiten (Seite {page + 1}
+        st.markdown(f"**📋 Belege bearbeiten (Seite {page + 1} von {max_pages} — Gesamt: {total_rows} Einträge)**")
+
+        st.data_editor(
+            df_page,
+            use_container_width=True, 
+            num_rows="fixed", 
+            key="beleg_editor_key", 
+            on_change=on_table_edited,
+            column_config={
+                "Rechnungsdatum":  st.column_config.TextColumn("📅 Rechnungsdatum", width="small"),
+                "🔗 Ausgangs-INV":  st.column_config.TextColumn("🔗 Ausgangs-INV (우리회사 인보이스)", width="medium"),
+                "Verkäufer":        st.column_config.TextColumn("Verkäufer", width="medium"),
+                "Beleg_Nr":        st.column_config.TextColumn("Beleg_Nr (구매영수증번호)", width="medium"),
+                "Beleg-Soll (Orig.)":    st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True, width="small"), 
+                "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%.2f €", width="small"), 
+                "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳 CC"),
+                "Zahlweg (DATEV)":         st.column_config.TextColumn("Zahlweg (DATEV)", disabled=True, width="small"),
+                f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium"),
+                "USt/Vorsteuer 19%":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%.2f €"),
+                "Vorsteuer 7%":   st.column_config.NumberColumn("Vorsteuer 7%", format="%.2f €"),
+                "Nettobetrag (Haben)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%.2f €"),
+                "Steuerschlüssel":       st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
+                "Zukünftiger DATEV-Dateiname": st.column_config.TextColumn("Zukünftiger DATEV-Dateiname", width="max"),
+                "_FileExt": None, "_RawBytes": None, "_OcrText": None
+            },
+        )
+        
+        p_col1, p_col2, p_col3 = st.columns([1, 4, 1])
+        with p_col1:
+            if st.button("⬅️ Vorherige", disabled=(page == 0), use_container_width=True):
+                st.session_state.current_page -= 1
+                st.rerun()
+        with p_col2:
+            st.markdown(f"<p style='text-align: center; color: gray; margin-top: 6px;'>Zeige Einträge {start_idx + 1} bis {min(end_idx, total_rows)}</p>", unsafe_allow_html=True)
+        with p_col3:
+            if st.button("Nächste ➡️", disabled=(page >= max_pages - 1), use_container_width=True):
+                st.session_state.current_page += 1
+                st.rerun()
+
+    render_isolated_data_editor()
+
+    # DOWNLOADS
+    df_final = st.session_state.edited_receipts
+    today = datetime.now().strftime("%Y%m%d")
+    st.markdown("### 📥 Bereitstellung der DATEV-Exportdateien")
+    col_dl1, col_dl2 = st.columns(2)
+    with col_dl1: st.download_button(label=f"📊 Buchungsliste als Excel-Export herunterladen (.xlsx)", data=build_excel_bytes(df_final), file_name=f"DATEV_{selected_skr}_Buchungsliste_{today}.xlsx", use_container_width=True)
+    with col_dl2:
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for _, row in df_final.iterrows():
+                sandwich_pdf_bytes = create_sandwich_pdf(row["_RawBytes"], row["_FileExt"], row["_OcrText"])
+                zip_file.writestr(row["Zukünftiger DATEV-Dateiname"], sandwich_pdf_bytes)
+        zip_buffer.seek(0)
+        st.download_button(label="📁 PDF-Belege als ZIP-Archiv herunterladen (.zip)", data=zip_buffer.getvalue(), file_name=f"DATEV_Digitale_Belege_{today}.zip", use_container_width=True, type="primary")
