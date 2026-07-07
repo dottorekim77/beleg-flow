@@ -33,7 +33,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v9.0 - 유료 API 완전 적용)")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v9.0.1 - Syntax Fix)")
 st.caption("BWA 및 DATEV 지침에 맞게 모든 금액 표시와 파일명을 독일식(1.234,56)으로 전면 수정한 버전입니다.")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -313,7 +313,8 @@ with st.expander("📝 Buchungsregeln verwalten", expanded=False):
         
         submit_rule = st.form_submit_button("💾 Regel speichern")
         if submit_rule and new_vendor:
-            st.session_state.custom_rules[new_vendor] = {"SKR03": new_skr03, "SKR04": new_sk Bert15}
+            # [수정완료] 오타 'new_sk Bert15'를 정상적인 변수명인 'new_skr04'로 완벽하게 수정했습니다.
+            st.session_state.custom_rules[new_vendor] = {"SKR03": new_skr03, "SKR04": new_skr04}
             st.toast(f"💾 Regel für '{new_vendor}' erfolgreich gespeichert!")
 
     if st.session_state.custom_rules:
@@ -337,9 +338,6 @@ with col_cfg1: default_zahlart = st.radio("💳 Standard-Zahlweg (DATEV)", optio
 with col_cfg2: selected_skr = st.radio("📋 Standardkontenrahmen (SKR)", options=["SKR03", "SKR04"], index=1, horizontal=True)
 
 if uploaded_files:
-    # [수정완료] 오류의 근원지였던 중복 'if not API_KEY:' 하단 구문을 완전히 제거했습니다.
-    # 이미 코드 최상단 영역(30~37라인)에서 원천 검증을 마치므로 시스템 안정성이 100% 보장됩니다.
-    
     batch_key = "".join(f.name for f in uploaded_files) + f"_{selected_skr}_{default_zahlart}"
     if st.session_state.get("last_batch_key") != batch_key:
         st.session_state.last_batch_key = batch_key
@@ -386,7 +384,6 @@ if uploaded_files:
                     "_FileExt": ext, "_RawBytes": file_bytes, "_OcrText": raw_text
                 })
                 
-                # 유료 API 트래픽이므로 대량의 영수증 업로드 시에도 프리티어용 지연시간(Delay) 없이 논스톱 실행됨
                 if total_files > 1 and idx < total_files - 1 and FREE_TIER_DELAY > 0: 
                     time.sleep(FREE_TIER_DELAY)
             
@@ -411,58 +408,4 @@ if uploaded_files:
         
         df_page = df.iloc[start_idx:end_idx]
 
-        st.markdown(f"**📋 Belege bearbeiten (Seite {page + 1} von {max_pages} — Gesamt: {total_rows} Einträge)**")
-
-        st.data_editor(
-            df_page,
-            use_container_width=True, 
-            num_rows="fixed", 
-            key="beleg_editor_key", 
-            on_change=on_table_edited,
-            column_config={
-                "Rechnungsdatum":  st.column_config.TextColumn("📅 Rechnungsdatum", width="small"),
-                "🔗 Ausgangs-INV":  st.column_config.TextColumn("🔗 Ausgangs-INV (우리회사 인보이스)", width="medium"),
-                "Verkäufer":        st.column_config.TextColumn("Verkäufer", width="medium"),
-                "Beleg_Nr":        st.column_config.TextColumn("Beleg_Nr (구매영수증번호)", width="medium"),
-                "Beleg-Soll (Orig.)":    st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True, width="small"), 
-                "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%.2f €", width="small"), 
-                "Is_Kreditkarte":  st.column_config.CheckboxColumn("💳 CC"),
-                "Zahlweg (DATEV)":         st.column_config.TextColumn("Zahlweg (DATEV)", disabled=True, width="small"),
-                f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium"),
-                "USt/Vorsteuer 19%":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%.2f €"),
-                "Vorsteuer 7%":   st.column_config.NumberColumn("Vorsteuer 7%", format="%.2f €"),
-                "Nettobetrag (Haben)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%.2f €"),
-                "Steuerschlüssel":       st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
-                "Zukünftiger DATEV-Dateiname": st.column_config.TextColumn("Zukünftiger DATEV-Dateiname", width="max"),
-                "_FileExt": None, "_RawBytes": None, "_OcrText": None
-            },
-        )
-        
-        p_col1, p_col2, p_col3 = st.columns([1, 4, 1])
-        with p_col1:
-            if st.button("⬅️ Vorherige", disabled=(page == 0), use_container_width=True):
-                st.session_state.current_page -= 1
-                st.rerun()
-        with p_col2:
-            st.markdown(f"<p style='text-align: center; color: gray; margin-top: 6px;'>Zeige Einträge {start_idx + 1} bis {min(end_idx, total_rows)}</p>", unsafe_allow_html=True)
-        with p_col3:
-            if st.button("Nächste ➡️", disabled=(page >= max_pages - 1), use_container_width=True):
-                st.session_state.current_page += 1
-                st.rerun()
-
-    render_isolated_data_editor()
-
-    # DOWNLOADS
-    df_final = st.session_state.edited_receipts
-    today = datetime.now().strftime("%Y%m%d")
-    st.markdown("### 📥 Bereitstellung der DATEV-Exportdateien")
-    col_dl1, col_dl2 = st.columns(2)
-    with col_dl1: st.download_button(label=f"📊 Buchungsliste als Excel-Export herunterladen (.xlsx)", data=build_excel_bytes(df_final), file_name=f"DATEV_{selected_skr}_Buchungsliste_{today}.xlsx", use_container_width=True)
-    with col_dl2:
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-            for _, row in df_final.iterrows():
-                sandwich_pdf_bytes = create_sandwich_pdf(row["_RawBytes"], row["_FileExt"], row["_OcrText"])
-                zip_file.writestr(row["Zukünftiger DATEV-Dateiname"], sandwich_pdf_bytes)
-        zip_buffer.seek(0)
-        st.download_button(label="📁 PDF-Belege als ZIP-Archiv herunterladen (.zip)", data=zip_buffer.getvalue(), file_name=f"DATEV_Digitale_Belege_{today}.zip", use_container_width=True, type="primary")
+        st.markdown(f"**📋 Belege bearbeiten (Seite {page + 1}
