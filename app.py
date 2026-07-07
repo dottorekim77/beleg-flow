@@ -16,8 +16,8 @@ from PIL import Image
 # ══════════════════════════════════════════════════════════════════════════════
 PAGE_TITLE      = "DATEV Beleg-Parser Pro AI"
 PAGE_ICON       = "🧾"
-GEMINI_MODEL    = "gemini-3.1-flash-lite"   
-FREE_TIER_DELAY = 4.0                       
+GEMINI_MODEL    = "gemini-2.0-flash"   
+FREE_TIER_DELAY = 0.0                       
 MWST_19_FACTOR  = 19 / 119
 MWST_7_FACTOR   = 7 / 107
 ITEMS_PER_PAGE  = 10  
