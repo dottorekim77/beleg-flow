@@ -16,7 +16,7 @@ from PIL import Image
 # ══════════════════════════════════════════════════════════════════════════════
 PAGE_TITLE      = "DATEV Beleg-Parser Pro AI"
 PAGE_ICON       = "🧾"
-GEMINI_MODEL    = "gemini-2.0-flash-exp"        # 유료 최고속 모델 적용
+GEMINI_MODEL    = "gemini-1.5-flash"        # 유료 최고속 모델 적용
 FREE_TIER_DELAY = 0.0                       # 유료이므로 강제 지연 0초로 해제
 MWST_19_FACTOR  = 19 / 119
 MWST_7_FACTOR   = 7 / 107
