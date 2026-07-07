@@ -12,46 +12,16 @@ from pypdf import PdfReader, PdfWriter
 from PIL import Image
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 1. STREAMLIT CONFIG & INTERFACE SETUP (최상단 고정)
+# CONFIG & HARD RESET (유료/선불 요금제 최적화 적용)
 # ══════════════════════════════════════════════════════════════════════════════
 PAGE_TITLE      = "DATEV Beleg-Parser Pro AI"
 PAGE_ICON       = "🧾"
-GEMINI_MODEL    = "gemini-2.0-flash"   # 유료 버전 효율을 극대화하는 최신 고성능 모델
-FREE_TIER_DELAY = 0.0                  # 유료 요금제이므로 요청 대기 지연 시간(Delay)을 0초로 단축하여 고속 처리
+GEMINI_MODEL    = "gemini-2.0-flash"        # 가장 빠르고 안정적인 최신 권장 모델
+FREE_TIER_DELAY = 0.0                       # [수정] 강제 딜레이 0초로 단축 (속도 극대화)
 MWST_19_FACTOR  = 19 / 119
 MWST_7_FACTOR   = 7 / 107
 ITEMS_PER_PAGE  = 10  
 
-st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
-
-# 사이드바 제거 및 여백 최적화
-st.markdown("""
-    <style>
-        [data-testid="stSidebarNav"] {display: none !important;}
-        section[data-testid="stSidebar"] {display: none !important;}
-        .block-container {padding-top: 2rem !important; padding-bottom: 2rem !important;}
-    </style>
-""", unsafe_allow_html=True)
-
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v9.6.0 - Timeout-Fix 적용)")
-st.caption("대용량 PDF 및 네트워크 레이턴시로 인한 Beleg_Timeout 현상을 전면 수정한 유료 최적화 버전입니다.")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 2. API AUTHENTIFIZIERUNG (결제된 Secrets 완전 자동 연동)
-# ══════════════════════════════════════════════════════════════════════════════
-API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-
-if not API_KEY:
-    API_KEY = st.text_input("🔑 Gemini API-Key 입력 (Secrets 로드 실패시 직접 입력)", type="password", key="main_api_key_input")
-    if not API_KEY:
-        st.warning("⚠️ 시스템을 작동하려면 Streamlit Secrets에 GEMINI_API_KEY를 등록하거나 위 입력창에 키를 입력해야 합니다.")
-        st.stop()
-
-genai.configure(api_key=API_KEY)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 3. GLOBAL CONSTANTS & CACHE RESET
-# ══════════════════════════════════════════════════════════════════════════════
 MIME_MAP = {
     "pdf":  "application/pdf",
     "jpg":  "image/jpeg",
@@ -60,6 +30,8 @@ MIME_MAP = {
 }
 
 ZAHLART_OPTIONS = ["Firmenkonto", "Kreditkarte"]
+Z_CODE_MAP      = {"Firmenkonto": "BANK", "Kreditkarte": "CC"}
+
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 
 INITIAL_VENDORS = {
@@ -71,6 +43,22 @@ INITIAL_VENDORS = {
     "Telekom":    {"SKR03": "4920 - Telefon", "SKR04": "6805 - Telefon"},
     "Ionq":       {"SKR03": "4980 - Betriebsbedarf", "SKR04": "6300 - Sonstige Aufwendungen"},
 }
+
+st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
+
+st.markdown("""
+    <style>
+        [data-testid="stSidebarNav"] {display: none !important;}
+        section[data-testid="stSidebar"] {display: none !important;}
+        .block-container {padding-top: 2rem !important; padding-bottom: 2rem !important;}
+    </style>
+""", unsafe_allow_html=True)
+
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v9.8.0 - Billing Tier 최적화)")
+st.caption("Tier 1 결제 환경 및 대용량 파일 파싱 레이턴시 문제를 전면 해결한 유료 버전 전용 코드입니다.")
+
+# Secrets 환경 가동 시 자동 로그인을 위한 키 맵핑
+API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 if st.button("🔄 시스템 캐시 및 메모리 강제 초기화 (먹통 해결용)"):
     st.cache_data.clear()
@@ -88,7 +76,7 @@ if "current_page" not in st.session_state:
     st.session_state.current_page = 0
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 4. HELPER: GERMAN NUMBER FORMATTER
+# HELPER: GERMAN NUMBER FORMATTER
 # ══════════════════════════════════════════════════════════════════════════════
 def to_german_amount_str(val: float) -> str:
     try:
@@ -101,7 +89,7 @@ def to_german_amount_str(val: float) -> str:
         return "0,00"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 5. BACKEND ENGINE & FILENAME BUILDER (Timeout 및 Retry 로직 강화)
+# BACKEND ENGINE & FILENAME BUILDER (Timeout 및 Retry 밸브 대폭 강화)
 # ══════════════════════════════════════════════════════════════════════════════
 def sanitize_filename(text: str) -> str: 
     return _ILLEGAL_CHARS.sub("", text).strip()
@@ -119,10 +107,9 @@ def build_datev_filename(date_str: str, vendor: str, brutto_eur: float, ausgang_
     return f"{base_name}.pdf"
 
 def ask_gemini_vision_direct(file_bytes: bytes, mime_type: str, skr_mode: str) -> tuple:
-    # 에러 발생 시 테이블에 표기될 디폴트 폴백 메시지
     fallback = ("", datetime.now().strftime("%Y-%m-%d"), "Fehler/Timeout", 0.0, "EUR", "", "AUTO_19", "No OCR text")
     
-    # [수정완료] 무거운 파일 처리를 위해 타임아웃을 15초에서 60초로 확대, 시도 횟수를 3회로 증가
+    # [개선] 선불 등급 백엔드 지연에 대응하기 위해 시도 횟수 3회로 확대, 타임아웃 60초로 넉넉하게 지정
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -131,7 +118,7 @@ def ask_gemini_vision_direct(file_bytes: bytes, mime_type: str, skr_mode: str) -
             
             response = model.generate_content(
                 [{"mime_type": mime_type, "data": file_bytes}, prompt_text],
-                request_options={"timeout": 60.0}  # 60초 허용 (대용량 PDF 완벽 대응)
+                request_options={"timeout": 60.0}  # 10초에서 60초로 상향하여 타임아웃 에러 방지
             )
             
             if response.text and "Total" in response.text:
@@ -139,13 +126,13 @@ def ask_gemini_vision_direct(file_bytes: bytes, mime_type: str, skr_mode: str) -
                 return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text
             
         except Exception as e:
-            # 네트워크가 튀었을 경우 지수형 대기 작동 (2초 -> 4초)
+            # 순간적인 네트워크 에러나 구글 서버 과부하시 2초, 4초 쉬면서 유연하게 재시도
             wait_time = (attempt + 1) * 2.0
             if attempt < max_retries - 1:
-                st.toast(f"⚠️ 연결 지연 발생 (재시도 {attempt+1}/{max_retries}). {wait_time}초 후 다시 시도합니다.", icon="⏳")
+                st.toast(f"⏳ 구글 서버 연결 지연 발생... 재시도 중 ({attempt+1}/{max_retries})", icon="ℹ️")
                 time.sleep(wait_time)
             else:
-                st.error(f"❌ 구글 API 통신 실패: {str(e)}")
+                st.error(f"❌ 분석 실패 (구글 API 통신 불안정): {str(e)}")
                 return fallback
                 
     return fallback
@@ -243,7 +230,7 @@ def calculate_tax_details(brutto_eur: float, mwst_type: str) -> tuple[float, flo
     return mwst_19, mwst_7, round(brutto_eur - (mwst_19 + mwst_7), 2)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 6. REKALKULATION & EXPORT
+# REKALKULATION & EXPORT
 # ══════════════════════════════════════════════════════════════════════════════
 def on_table_edited() -> None:
     edit_state  = st.session_state.get("beleg_editor_key", {})
@@ -305,8 +292,11 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 7. MAIN UI RENDERING
+# MAIN UI
 # ══════════════════════════════════════════════════════════════════════════════
+if not API_KEY:
+    API_KEY = st.sidebar.text_input("🔑 Gemini API-Key", type="password")
+
 with st.expander("📝 Buchungsregeln verwalten", expanded=False):
     st.caption("Verwalten Sie hier Ihre automatischen Zuweisungsregeln für bekannte Kreditoren.")
     
@@ -342,6 +332,10 @@ with col_cfg1: default_zahlart = st.radio("💳 Standard-Zahlweg (DATEV)", optio
 with col_cfg2: selected_skr = st.radio("📋 Standardkontenrahmen (SKR)", options=["SKR03", "SKR04"], index=1, horizontal=True)
 
 if uploaded_files:
+    if not API_KEY:
+        st.warning("⚠️ Bitte geben Sie zuerst den Gemini API-Key ein, um die Belege zu analysieren.")
+        st.stop()
+
     batch_key = "".join(f.name for f in uploaded_files) + f"_{selected_skr}_{default_zahlart}"
     if st.session_state.get("last_batch_key") != batch_key:
         st.session_state.last_batch_key = batch_key
