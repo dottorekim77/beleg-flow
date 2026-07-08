@@ -371,18 +371,17 @@ if uploaded_files:
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
-    # 🛠️ [Fix] 체크박스 대신 실제 커스텀 옵션 목록을 품은 완벽한 SelectboxColumn 매핑 구조
+# 🛠️ [Fix] placeholder 파라미터를 무해한 help(툴팁) 파라미터로 변경
     st.data_editor(
         st.session_state.edited_receipts,
         use_container_width=True, num_rows="dynamic", height=400, key="beleg_editor_key", on_change=on_table_edited,
         column_config={
-            f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium", placeholder="👉 Zur Prüfung durch Steuerberater (Leer)"),
+            f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium", help="👉 Zur Prüfung durch Steuerberater (Leer)"),
             "Beleg-Soll (Orig.)":    st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True), 
             "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €"),
             "USt/Vorsteuer 19%":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
             "Vorsteuer 7%":   st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
             "Nettobetrag (Haben)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
-            # 💡 기존의 다루기 불편했던 체크박스(💳) 방식을 제거하고, 사용자가 정의한 실시간 결제수단 목록이 선택박스로 완벽 연동되도록 수정했습니다.
             "Zahlweg (DATEV)":         st.column_config.SelectboxColumn("Zahlweg (DATEV)", options=st.session_state.custom_zahlungswege, width="medium"),
             "Steuerschlüssel":       st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
             "🔗 Ausgangs-INV":  st.column_config.TextColumn("🔗 Ausgangs-INV"),
