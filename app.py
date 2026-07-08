@@ -1,5 +1,7 @@
 import io
+import os
 import re
+import json
 import time
 import zipfile
 from datetime import datetime
@@ -12,7 +14,7 @@ from pypdf import PdfReader, PdfWriter
 from PIL import Image
 
 # ══════════════════════════════════════════════════════════════════════════════
-# KONSTANTEN & CONFIG
+# KONSTANTEN & CONFIG & LOCAL STORAGE (JSON)
 # ══════════════════════════════════════════════════════════════════════════════
 PAGE_TITLE      = "DATEV Beleg-Parser Pro AI"
 PAGE_ICON       = "🧾"
@@ -20,6 +22,8 @@ GEMINI_MODEL    = "gemini-3.1-flash-lite"
 FREE_TIER_DELAY = 4.2                        
 MWST_19_FACTOR  = 19 / 119
 MWST_7_FACTOR   = 7 / 107
+
+CONFIG_FILE     = "config_belegflow.json"  # 💾 영구 저장을 위한 로컬 파일 경로
 
 MIME_MAP = {
     "pdf":  "application/pdf",
@@ -30,11 +34,34 @@ MIME_MAP = {
 
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 
-# 💡 기본 마스터 규칙 정의 (Shell, Google 2개만 유지)
+# 💡 기본 마스터 규칙 정의
 INITIAL_VENDORS = {
     "Shell":      {"SKR03": "4530 - Kfz-Betriebskosten", "SKR04": "6520 - Kfz-Betriebskosten"},
     "Google":     {"SKR03": "4920 - Telefon", "SKR04": "6815 - Bürobedarf"},
 }
+INITIAL_ZAHLUNGSWEGE = ["Firmenkonto", "Kreditkarte"]
+
+def load_permanent_config():
+    """하드디스크에서 설정 파일 읽기"""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"custom_rules": INITIAL_VENDORS, "custom_zahlungswege": INITIAL_ZAHLUNGSWEGE}
+
+def save_permanent_config():
+    """하드디스크에 설정 파일 쓰기 (추가/삭제 시 자동 호출)"""
+    config_data = {
+        "custom_rules": st.session_state.custom_rules,
+        "custom_zahlungswege": st.session_state.custom_zahlungswege
+    }
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config_data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        st.error(f"Fehler beim Speichern der Konfiguration: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STREAMLIT PAGE SETUP & CSS HACKS
@@ -49,10 +76,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (Pure German Edition)")
-st.caption("Automatisierte Belegfassung mit SKR-Klassifizierung. Alle Begriffe entsprechen den offiziellen deutschen Buchhaltungsstandards.")
+st.caption("Automatisierte Belegfassung mit dauerhafter Speicherung der Konfiguration.")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# API AUTHENTIFIZIERUNG & 영구 세션 설정
+# API AUTHENTIFIZIERUNG & 영구 세션 초기화 (파일 연동)
 # ══════════════════════════════════════════════════════════════════════════════
 API_KEY: str = st.secrets.get("GEMINI_API_KEY", "")
 if not API_KEY:
@@ -61,13 +88,15 @@ if not API_KEY:
 else:
     genai.configure(api_key=API_KEY)
 
-# 💾 브라우저를 새로고침하더라도 보존되는 설정 보관소
-if "custom_rules" not in st.session_state:
-    st.session_state.custom_rules = INITIAL_VENDORS.copy()
-if "custom_zahlungswege" not in st.session_state:
-    st.session_state.custom_zahlungswege = ["Firmenkonto"]  # Firmenkonto가 최상단 기본값
+# 로컬 저장소 데이터 로드
+loaded_cfg = load_permanent_config()
 
-# 🧼 작업 종료 시 휘발되는 영수증 데이터
+if "custom_rules" not in st.session_state:
+    st.session_state.custom_rules = loaded_cfg["custom_rules"]
+if "custom_zahlungswege" not in st.session_state:
+    st.session_state.custom_zahlungswege = loaded_cfg["custom_zahlungswege"]
+
+# 휘발성 영수증 테이블 데이터
 if "edited_receipts" not in st.session_state:
     st.session_state.edited_receipts = None
 
@@ -122,6 +151,8 @@ def sanitize_filename(text: str) -> str: return _ILLEGAL_CHARS.sub("", text).str
 def build_datev_filename(date_str: str, vendor: str, brutto_eur: float, zahlart: str, beleg_nr: str, inv_nr: str) -> str:
     if str(zahlart).lower() == "firmenkonto":
         z_code = "B"
+    elif str(zahlart).lower() == "kreditkarte":
+        z_code = "C"
     elif str(zahlart).lower() == "bar":
         z_code = "BAR"
     else:
@@ -208,7 +239,6 @@ def on_table_edited() -> None:
 
     df = st.session_state.edited_receipts.copy()
     
-    # 🛠️ 행 삭제 유연 처리 연동
     if deleted_rows:
         indices_to_drop = [df.index[int(idx)] for idx in deleted_rows]
         df = df.drop(index=indices_to_drop)
@@ -217,7 +247,6 @@ def on_table_edited() -> None:
         st.session_state.edited_receipts = df
         return
 
-    # 🛠️ 수동 편집 시 실시간 유기적 계산 및 파일명 동적 동기화
     for row_idx_str, changes in edited_rows.items():
         label = df.index[int(row_idx_str)]
         for col, new_val in changes.items(): 
@@ -228,6 +257,7 @@ def on_table_edited() -> None:
         df.at[label, "USt/Vorsteuer 19%"] = mwst_19
         df.at[label, "Vorsteuer 7%"]  = mwst_7
         df.at[label, "Nettobetrag (Haben)"]    = netto
+        # 🛠️ [Fix] 컬럼 매핑 완벽 일치 구조 처리
         df.at[label, "Zukünftiger DATEV-Dateiname"] = build_datev_filename(
             str(df.at[label, "Rechnungsdatum"]), str(df.at[label, "Verkäufer"]), brutto_eur,
             str(df.at[label, "Zahlweg (DATEV)"]), str(df.at[label, "Beleg_Nr"]), str(df.at[label, "🔗 Ausgangs-INV"])
@@ -265,7 +295,6 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
 # MAIN UI
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ⚙️ 상단 마스터 설정 및 규칙 관리 영역 (2열 배치)
 col_menu1, col_menu2 = st.columns(2)
 
 with col_menu1:
@@ -275,8 +304,9 @@ with col_menu1:
             with c1: new_vendor = st.text_input("Kreditor / Vendor")
             with c2: new_skr03  = st.text_input("SKR03")
             with c3: new_skr04  = st.text_input("SKR04")
-            if st.form_submit_button("Regel保存") and new_vendor:
+            if st.form_submit_button("Regel speichern") and new_vendor:
                 st.session_state.custom_rules[new_vendor] = {"SKR03": new_skr03, "SKR04": new_skr04}
+                save_permanent_config()  # 💾 즉시 하드 저장
                 st.rerun()
 
         if st.session_state.custom_rules:
@@ -287,10 +317,10 @@ with col_menu1:
                 r_col3.text(st.session_state.custom_rules[v]["SKR04"])
                 if r_col4.button("Löschen", key=f"del_{v}"):
                     del st.session_state.custom_rules[v]
+                    save_permanent_config()  # 💾 삭제 즉시 하드 저장
                     st.rerun()
 
 with col_menu2:
-    # 💳 [Zahlungswege 관리 기능 통합]
     with st.expander("💳 Zahlungswege verwalten", expanded=False):
         with st.form("new_zw_form", clear_on_submit=True):
             zw_in, zw_btn = st.columns([3, 1])
@@ -299,15 +329,17 @@ with col_menu2:
             if submit_zw and new_zw:
                 if new_zw not in st.session_state.custom_zahlungswege:
                     st.session_state.custom_zahlungswege.append(new_zw)
+                    save_permanent_config()  # 💾 추가 즉시 하드 저장
                     st.rerun()
 
         if st.session_state.custom_zahlungswege:
             for zw_item in list(st.session_state.custom_zahlungswege):
                 zw_c1, zw_c2 = st.columns([3, 1])
                 zw_c1.text(zw_item)
-                if zw_item != "Firmenkonto":  # 디폴트 마스터 보호
+                if zw_item not in ["Firmenkonto", "Kreditkarte"]:  # 마스터 기본값 삭제 방지 보호
                     if zw_c2.button("Löschen", key=f"del_zw_{zw_item}"):
                         st.session_state.custom_zahlungswege.remove(zw_item)
+                        save_permanent_config()  # 💾 삭제 즉시 하드 저장
                         st.rerun()
 
 st.markdown("---")
@@ -344,6 +376,7 @@ if uploaded_files:
                 assigned_kategorie = get_assigned_account(vendor, selected_skr)
                 mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
 
+                # 🛠️ [Fix complete] 아래 딕셔너리 Key 명칭과 st.data_editor 컬럼 환경명을 'Zahlweg (DATEV)'로 완벽 통일하여 공란 발생 박멸
                 rows.append({
                     "Rechnungsdatum":  date_str,
                     "Verkäufer":        vendor,
@@ -353,7 +386,7 @@ if uploaded_files:
                     "USt/Vorsteuer 19%":  mwst_19,
                     "Vorsteuer 7%":   mwst_7,
                     "Nettobetrag (Haben)":      netto,
-                    "Zahlweg (DATEV)":          default_zahlart,  # 공란 방지: 설정한 디폴트값 무조건 주입
+                    "Zahlweg (DATEV)":          default_zahlart,  
                     "Steuerschlüssel":        mwst_type,
                     "Beleg_Nr":        beleg_nr,
                     "🔗 Ausgangs-INV":  "",
@@ -366,7 +399,7 @@ if uploaded_files:
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
-    # 🛠️ [Fix Complete] placeholder 제거 및 최적화된 Selectbox/TextColumn 구성
+    # 🛠️ 데이터 에디터 바인딩
     st.data_editor(
         st.session_state.edited_receipts,
         use_container_width=True, num_rows="dynamic", height=400, key="beleg_editor_key", on_change=on_table_edited,
@@ -403,13 +436,13 @@ if uploaded_files:
     # 🔒 선별적 세션 데이터 파기 장치
     st.markdown("---")
     st.markdown("#### 🔒 Datensicherheit & Datenschutz")
-    st.info("Alle Belege befinden sich ausschließlich im RAM Ihres Browsers. Ihre Buchungsregeln und Zahlungswege bleiben permanent für zukünftige Sitzungen erhalten.")
+    st.info("Alle Belege befinden sich ausschließlich im RAM Ihres Browsers. Ihre Buchungsregeln und Zahlungswege bleiben permanent auf der Festplatte gespeichert.")
     
     if st.button("Arbeitssitzung beenden (Belege unwiderruflich aus dem RAM löschen)", type="secondary", use_container_width=True):
         st.session_state.edited_receipts = None
         if "last_batch_key" in st.session_state:
             del st.session_state.last_batch_key
         st.cache_data.clear()
-        st.success("Erfolgreich bereinigt! Alle Belegdaten wurden restlos entfernt, Ihre Einstellungen blieben erhalten.")
+        st.success("Erfolgreich bereinigt! Alle Belegdaten wurden restlos entfernt. Ihre Einstellungen blieben sicher auf der Festplatte erhalten.")
         time.sleep(1.2)
         st.rerun()
