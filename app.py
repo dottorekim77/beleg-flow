@@ -30,11 +30,10 @@ MIME_MAP = {
 
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 
-# 💡 [Verifizierte Mandanten-Buchungsregeln für automatische Zuweisung]
-KNOWN_VENDORS = {
+# 💡 기본 마스터 규칙 정의 (Shell, Google 2개만 유지)
+INITIAL_VENDORS = {
     "Shell":      {"SKR03": "4530 - Kfz-Betriebskosten", "SKR04": "6520 - Kfz-Betriebskosten"},
-    "Aral":       {"SKR03": "4530 - Kfz-Betriebskosten", "SKR04": "6520 - Kfz-Betriebskosten"},
-    "Telekom":    {"SKR03": "4920 - Telefon", "SKR04": "6805 - Telefon"},
+    "Google":     {"SKR03": "4920 - Telefon", "SKR04": "6815 - Bürobedarf"},
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -49,8 +48,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (v4.9 - Pure German Edition)")
-st.caption("Automatisierte Belegfassung mit SKR-Klassifizierung. Fehlerfreie Dynamische Zahlungswege ohne Validierungsfehler.")
+st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (Pure German Edition)")
+st.caption("Automatisierte Belegfassung mit SKR-Klassifizierung. Alle Begriffe entsprechen den offiziellen deutschen Buchhaltungsstandards.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # API AUTHENTIFIZIERUNG & 영구 세션 설정
@@ -62,11 +61,11 @@ if not API_KEY:
 else:
     genai.configure(api_key=API_KEY)
 
-# 💾 브라우저를 새로고침하거나 유지해도 보존되는 설정 보관소
+# 💾 브라우저를 새로고침하더라도 보존되는 설정 보관소
 if "custom_rules" not in st.session_state:
-    st.session_state.custom_rules = KNOWN_VENDORS.copy()
+    st.session_state.custom_rules = INITIAL_VENDORS.copy()
 if "custom_zahlungswege" not in st.session_state:
-    st.session_state.custom_zahlungswege = ["Firmenkonto", "Kreditkarte"]
+    st.session_state.custom_zahlungswege = ["Firmenkonto"]  # Firmenkonto가 최상단 기본값
 
 # 🧼 작업 종료 시 휘발되는 영수증 데이터
 if "edited_receipts" not in st.session_state:
@@ -121,11 +120,8 @@ def create_sandwich_pdf(file_bytes: bytes, ext: str, raw_ai_text: str) -> bytes:
 def sanitize_filename(text: str) -> str: return _ILLEGAL_CHARS.sub("", text).strip()
 
 def build_datev_filename(date_str: str, vendor: str, brutto_eur: float, zahlart: str, beleg_nr: str, inv_nr: str) -> str:
-    # 🛠️ 수동 추가된 모든 Zahlart 명칭에 안전하게 대응하는 고유 접미사 생성기
     if str(zahlart).lower() == "firmenkonto":
         z_code = "B"
-    elif str(zahlart).lower() == "kreditkarte":
-        z_code = "C"
     elif str(zahlart).lower() == "bar":
         z_code = "BAR"
     else:
@@ -212,7 +208,7 @@ def on_table_edited() -> None:
 
     df = st.session_state.edited_receipts.copy()
     
-    # 🛠️ [Fix] 행 삭제 기능 연동
+    # 🛠️ 행 삭제 유연 처리 연동
     if deleted_rows:
         indices_to_drop = [df.index[int(idx)] for idx in deleted_rows]
         df = df.drop(index=indices_to_drop)
@@ -221,7 +217,7 @@ def on_table_edited() -> None:
         st.session_state.edited_receipts = df
         return
 
-    # 🛠️ [Fix] 셀 수동 편집 및 드롭다운 연동 실시간 재계산
+    # 🛠️ 수동 편집 시 실시간 유기적 계산 및 파일명 동적 동기화
     for row_idx_str, changes in edited_rows.items():
         label = df.index[int(row_idx_str)]
         for col, new_val in changes.items(): 
@@ -269,7 +265,7 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
 # MAIN UI
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ⚙️ 상단 설정 섹션 (2열 배치 구조)
+# ⚙️ 상단 마스터 설정 및 규칙 관리 영역 (2열 배치)
 col_menu1, col_menu2 = st.columns(2)
 
 with col_menu1:
@@ -279,7 +275,7 @@ with col_menu1:
             with c1: new_vendor = st.text_input("Kreditor / Vendor")
             with c2: new_skr03  = st.text_input("SKR03")
             with c3: new_skr04  = st.text_input("SKR04")
-            if st.form_submit_button("Regel speichern") and new_vendor:
+            if st.form_submit_button("Regel保存") and new_vendor:
                 st.session_state.custom_rules[new_vendor] = {"SKR03": new_skr03, "SKR04": new_skr04}
                 st.rerun()
 
@@ -294,7 +290,7 @@ with col_menu1:
                     st.rerun()
 
 with col_menu2:
-    # 🌟 [개선] Zahlungswege 커스텀 동적 보관 관리판
+    # 💳 [Zahlungswege 관리 기능 통합]
     with st.expander("💳 Zahlungswege verwalten", expanded=False):
         with st.form("new_zw_form", clear_on_submit=True):
             zw_in, zw_btn = st.columns([3, 1])
@@ -309,7 +305,7 @@ with col_menu2:
             for zw_item in list(st.session_state.custom_zahlungswege):
                 zw_c1, zw_c2 = st.columns([3, 1])
                 zw_c1.text(zw_item)
-                if zw_item != "Firmenkonto":  # 기본 디폴트 값 보호
+                if zw_item != "Firmenkonto":  # 디폴트 마스터 보호
                     if zw_c2.button("Löschen", key=f"del_zw_{zw_item}"):
                         st.session_state.custom_zahlungswege.remove(zw_item)
                         st.rerun()
@@ -320,7 +316,6 @@ uploaded_files = st.file_uploader("📂 Digitale Belege hochladen (PDF, PNG, JPG
 
 col_cfg1, col_cfg2 = st.columns(2)
 with col_cfg1: 
-    # 기억된 커스텀 결제수단 리스트를 라디오 버튼에 자동 매핑
     default_zahlart = st.radio("Zahlungsweg Standard", options=st.session_state.custom_zahlungswege, index=0, horizontal=True)
 with col_cfg2: 
     selected_skr = st.radio("SKR Standard", options=["SKR03", "SKR04"], index=1, horizontal=True)
@@ -358,7 +353,7 @@ if uploaded_files:
                     "USt/Vorsteuer 19%":  mwst_19,
                     "Vorsteuer 7%":   mwst_7,
                     "Nettobetrag (Haben)":      netto,
-                    "Zahlweg (DATEV)":          default_zahlart, # 선택한 디폴트 값 바인딩
+                    "Zahlweg (DATEV)":          default_zahlart,  # 공란 방지: 설정한 디폴트값 무조건 주입
                     "Steuerschlüssel":        mwst_type,
                     "Beleg_Nr":        beleg_nr,
                     "🔗 Ausgangs-INV":  "",
@@ -371,7 +366,7 @@ if uploaded_files:
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
-# 🛠️ [Fix] placeholder 파라미터를 무해한 help(툴팁) 파라미터로 변경
+    # 🛠️ [Fix Complete] placeholder 제거 및 최적화된 Selectbox/TextColumn 구성
     st.data_editor(
         st.session_state.edited_receipts,
         use_container_width=True, num_rows="dynamic", height=400, key="beleg_editor_key", on_change=on_table_edited,
