@@ -17,7 +17,7 @@ from PIL import Image
 PAGE_TITLE      = "DATEV Beleg-Parser Pro AI"
 PAGE_ICON       = "🧾"
 GEMINI_MODEL    = "gemini-3.1-flash-lite"   
-FREE_TIER_DELAY = 0.0  # 가짜 대기 시간 제거 (구글 API 속도 그대로 반영)
+FREE_TIER_DELAY = 0.0  # 유료 계정 속도 100% 활용
 MWST_19_FACTOR  = 19 / 119
 MWST_7_FACTOR   = 7 / 107
 
@@ -28,15 +28,14 @@ MIME_MAP = {
     "png":  "image/png",
 }
 
-# 확장된 공식 Zahlungsweg 옵션 및 DATEV 접미사 매핑
+# 공식 Zahlungsweg 옵션 및 DATEV 파일명 접미사 매핑
 ZAHLART_OPTIONS = ["Firmenkonto", "Kreditkarte", "Paypal", "Bar"]
-Z_CODE_MAP      = {"Firmenkonto": "BANK", "Kreditkarte": "KK", "Paypal": "PAYPAL", "Bar": "BAR"}
 Z_FILE_SUFFIX   = {"Firmenkonto": "B", "Kreditkarte": "C", "Paypal": "P", "Bar": "BAR"}
 
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 
-# 💡 최소화된 기본 Buchungsregeln (Shell, Google만 유지)
-KNOWN_VENDORS = {
+# 💡 딱 두 가지만 남겨둔 기본 초기 규칙 정의
+INITIAL_VENDORS = {
     "Shell":      {"SKR03": "4530 - Kfz-Betriebskosten", "SKR04": "6520 - Kfz-Betriebskosten"},
     "Google":     {"SKR03": "4920 - Telefon", "SKR04": "6815 - Bürobedarf"},
 }
@@ -66,12 +65,18 @@ if not API_KEY:
 else:
     genai.configure(api_key=API_KEY)
 
+# 세션 규칙 상태 초기화 (두 가지만 포함된 딕셔너리로 초기화)
+if "custom_rules" not in st.session_state:
+    st.session_state.custom_rules = INITIAL_VENDORS.copy()
+if "edited_receipts" not in st.session_state:
+    st.session_state.edited_receipts = None
+
 # ══════════════════════════════════════════════════════════════════════════════
 # BACKEND ENGINE FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(show_spinner=False)
-def ask_gemini_vision_cached(file_bytes: bytes, mime_type: str, skr_mode: str, api_key_trigger: str) -> tuple:
+def ask_gemini_vision_cached(file_bytes: bytes, mime_type: str, api_key_trigger: str) -> tuple:
     fallback = ("", datetime.now().strftime("%Y-%m-%d"), "Unbekannt", 0.0, "EUR", "", "AUTO_19", "No OCR text")
     if not api_key_trigger: return fallback + (False,)
     try:
@@ -85,7 +90,7 @@ def ask_gemini_vision_cached(file_bytes: bytes, mime_type: str, skr_mode: str, a
 
 def get_assigned_account(vendor_name: str, skr_mode: str) -> str:
     v_upper = vendor_name.upper()
-    for keyword, accounts in KNOWN_VENDORS.items():
+    for keyword, accounts in st.session_state.custom_rules.items():
         if keyword.upper() in v_upper:
             return accounts[skr_mode]
     return ""
@@ -197,17 +202,16 @@ def on_table_edited() -> None:
 
     df = st.session_state.edited_receipts.copy()
     
-    # 행 삭제 대응
+    # 데이터 행 수동 삭제 이벤트 대응
     if deleted_rows:
         indices_to_drop = [df.index[int(idx)] for idx in deleted_rows]
         df = df.drop(index=indices_to_drop)
-        # 인덱스 순치 재정렬
         df.index = range(1, len(df) + 1)
         df.index.name = "Nr."
         st.session_state.edited_receipts = df
         return
 
-    # 행 수정 대응
+    # 데이터 수동 수정 이벤트 대응 (Zahlungsweg 변경 포함)
     for row_idx_str, changes in edited_rows.items():
         label = df.index[int(row_idx_str)]
         for col, new_val in changes.items(): df.at[label, col] = new_val
@@ -254,7 +258,30 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
 # MAIN UI
 # ══════════════════════════════════════════════════════════════════════════════
 
-uploaded_files = st.file_uploader("📂 Digitale Belege hochladen (PDF, PNG, JPG, JPEG)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
+# 🛠️ 상단 고정 규칙 관리 메뉴 (Shell, Google 두 가지만 기본값으로 활성화)
+with st.expander("Buchungsregeln verwalten", expanded=False):
+    with st.form("new_rule_form", clear_on_submit=True):
+        c1, c2, c3 = st.columns([2, 3, 3])
+        with c1: new_vendor = st.text_input("Kreditor / Vendor")
+        with c2: new_skr03  = st.text_input("SKR03")
+        with c3: new_skr04  = st.text_input("SKR04")
+        if st.form_submit_button("Regel speichern") and new_vendor:
+            st.session_state.custom_rules[new_vendor] = {"SKR03": new_skr03, "SKR04": new_skr04}
+            st.rerun()
+
+    if st.session_state.custom_rules:
+        for v in list(st.session_state.custom_rules.keys()):
+            r_col1, r_col2, r_col3, r_col4 = st.columns([2, 3, 3, 1])
+            r_col1.text(v)
+            r_col2.text(st.session_state.custom_rules[v]["SKR03"])
+            r_col3.text(st.session_state.custom_rules[v]["SKR04"])
+            if r_col4.button("Löschen", key=f"del_{v}"):
+                del st.session_state.custom_rules[v]
+                st.rerun()
+
+st.markdown("---")
+
+uploaded_files = st.file_uploader("Digitale Belege hochladen (PDF, PNG, JPG, JPEG)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 
 col_cfg1, col_cfg2 = st.columns(2)
 with col_cfg1: default_zahlart = st.radio("Zahlungsweg Standard", options=ZAHLART_OPTIONS, index=0, horizontal=True)
@@ -277,14 +304,14 @@ if uploaded_files:
                 ext        = uploaded_file.name.rsplit(".", 1)[-1].lower()
                 mime_type  = MIME_MAP.get(ext, "application/octet-stream")
 
-                res = ask_gemini_vision_cached(file_bytes, mime_type, selected_skr, API_KEY)
+                res = ask_gemini_vision_cached(file_bytes, mime_type, API_KEY)
                 beleg_nr, date_str, vendor, total, currency, _, mwst_type, raw_text = res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7]
                 was_called = res[8] if len(res) > 8 else False
 
                 assigned_kategorie = get_assigned_account(vendor, selected_skr)
                 mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
 
-                # 요청하신 완벽한 독일 공식 전표 입력 순서와 데이터 필드 매핑
+                # 지정하신 완벽한 순서 구조로 데이터 매핑
                 rows.append({
                     "Belegdatum": date_str,
                     "Ausgangs-Rechnungsnummer": "",
@@ -307,7 +334,7 @@ if uploaded_files:
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
-    # DATA EDITOR (이모티콘 완벽 제거 및 정렬 적용 / 행 삭제 num_rows="dynamic" 활성화)
+    # DATA EDITOR (이모티콘 완벽 제거 / 순서 정렬 / 수동 편집 및 유동적 삭제 보장)
     st.data_editor(
         st.session_state.edited_receipts,
         use_container_width=True, num_rows="dynamic", height=400, key="beleg_editor_key", on_change=on_table_edited,
@@ -346,7 +373,7 @@ if uploaded_files:
         zip_buffer.seek(0)
         st.download_button(label="PDF-Belege als ZIP-Archiv herunterladen (.zip)", data=zip_buffer.getvalue(), file_name=f"DATEV_Digitale_Belege_{today}.zip", use_container_width=True, type="primary")
 
-    # 🛡️ 수동 보안 파기 제어판 (모든 다운로드를 마친 후 사용자가 직접 파기 실행)
+    # 🛡️ 수동 보안 파기 제어판 (모든 다운로드를 마친 후 임시 RAM 완전 소멸 처리)
     st.markdown("---")
     st.markdown("#### 🔒 Datensicherheit & Datenschutz")
     st.info("Alle hochgeladenen Belege befinden sich ausschließlich im flüchtigen RAM-Arbeitsspeicher Ihres Browsers. Nach dem Herunterladen beider Dateien können Sie den Speicher manuell komplett bereinigen.")
