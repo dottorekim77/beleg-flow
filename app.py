@@ -1,7 +1,5 @@
 import io
-import os
 import re
-import json
 import time
 import zipfile
 from datetime import datetime
@@ -14,16 +12,14 @@ from pypdf import PdfReader, PdfWriter
 from PIL import Image
 
 # ══════════════════════════════════════════════════════════════════════════════
-# KONSTANTEN & CONFIG & LOCAL STORAGE (JSON)
+# KONSTANTEN & CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
 PAGE_TITLE      = "DATEV Beleg-Parser Pro AI"
 PAGE_ICON       = "🧾"
 GEMINI_MODEL    = "gemini-3.1-flash-lite"   
-FREE_TIER_DELAY = 4.2                        
+FREE_TIER_DELAY = 0.0  
 MWST_19_FACTOR  = 19 / 119
 MWST_7_FACTOR   = 7 / 107
-
-CONFIG_FILE     = "config_belegflow.json"  # 💾 영구 저장을 위한 로컬 파일 경로
 
 MIME_MAP = {
     "pdf":  "application/pdf",
@@ -32,36 +28,16 @@ MIME_MAP = {
     "png":  "image/png",
 }
 
+ZAHLART_OPTIONS = ["Firmenkonto", "Kreditkarte", "Paypal", "Bar"]
+Z_FILE_SUFFIX   = {"Firmenkonto": "B", "Kreditkarte": "C", "Paypal": "P", "Bar": "BAR"}
+
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|]')
 
-# 💡 기본 마스터 규칙 정의
+# 💡 딱 두 가지만 남겨둔 기본 초기 규칙 정의
 INITIAL_VENDORS = {
     "Shell":      {"SKR03": "4530 - Kfz-Betriebskosten", "SKR04": "6520 - Kfz-Betriebskosten"},
     "Google":     {"SKR03": "4920 - Telefon", "SKR04": "6815 - Bürobedarf"},
 }
-INITIAL_ZAHLUNGSWEGE = ["Firmenkonto", "Kreditkarte"]
-
-def load_permanent_config():
-    """하드디스크에서 설정 파일 읽기"""
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"custom_rules": INITIAL_VENDORS, "custom_zahlungswege": INITIAL_ZAHLUNGSWEGE}
-
-def save_permanent_config():
-    """하드디스크에 설정 파일 쓰기 (추가/삭제 시 자동 호출)"""
-    config_data = {
-        "custom_rules": st.session_state.custom_rules,
-        "custom_zahlungswege": st.session_state.custom_zahlungswege
-    }
-    try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config_data, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        st.error(f"Fehler beim Speichern der Konfiguration: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STREAMLIT PAGE SETUP & CSS HACKS
@@ -75,11 +51,11 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title(f"{PAGE_ICON} Kognitiver Beleg-Parser (Pure German Edition)")
-st.caption("Automatisierte Belegfassung mit dauerhafter Speicherung der Konfiguration.")
+st.title("Kognitiver Beleg-Parser (Pure German Edition)")
+st.caption("Automatisierte Belegfassung mit SKR-Klassifizierung. Alle Begriffe entsprechen den offiziellen deutschen Buchhaltungsstandards.")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# API AUTHENTIFIZIERUNG & 영구 세션 초기화 (파일 연동)
+# API AUTHENTIFIZIERUNG
 # ══════════════════════════════════════════════════════════════════════════════
 API_KEY: str = st.secrets.get("GEMINI_API_KEY", "")
 if not API_KEY:
@@ -88,29 +64,22 @@ if not API_KEY:
 else:
     genai.configure(api_key=API_KEY)
 
-# 로컬 저장소 데이터 로드
-loaded_cfg = load_permanent_config()
-
 if "custom_rules" not in st.session_state:
-    st.session_state.custom_rules = loaded_cfg["custom_rules"]
-if "custom_zahlungswege" not in st.session_state:
-    st.session_state.custom_zahlungswege = loaded_cfg["custom_zahlungswege"]
-
-# 휘발성 영수증 테이블 데이터
+    st.session_state.custom_rules = INITIAL_VENDORS.copy()
 if "edited_receipts" not in st.session_state:
     st.session_state.edited_receipts = None
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BACKEND ENGINE FUNCTIONS (CACHED)
+# BACKEND ENGINE FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(show_spinner=False)
-def ask_gemini_vision_cached(file_bytes: bytes, mime_type: str, skr_mode: str, api_key_trigger: str) -> tuple:
+def ask_gemini_vision_cached(file_bytes: bytes, mime_type: str, api_key_trigger: str) -> tuple:
     fallback = ("", datetime.now().strftime("%Y-%m-%d"), "Unbekannt", 0.0, "EUR", "", "AUTO_19", "No OCR text")
-    if not api_key_trigger: return fallback
+    if not api_key_trigger: return fallback + (False,)
     try:
         model = genai.GenerativeModel(GEMINI_MODEL)
-        prompt_text = get_gemini_prompt(skr_mode)
+        prompt_text = get_gemini_prompt()
         response = model.generate_content([{"mime_type": mime_type, "data": file_bytes}, prompt_text])
         beleg_nr, d_str, ven, tot, cur, kat, m_type = _parse_gemini_response(response.text)
         return beleg_nr, d_str, ven, tot, cur, kat, m_type, response.text, True
@@ -148,23 +117,15 @@ def create_sandwich_pdf(file_bytes: bytes, ext: str, raw_ai_text: str) -> bytes:
 
 def sanitize_filename(text: str) -> str: return _ILLEGAL_CHARS.sub("", text).strip()
 
-def build_datev_filename(date_str: str, vendor: str, brutto_eur: float, zahlart: str, beleg_nr: str, inv_nr: str) -> str:
-    if str(zahlart).lower() == "firmenkonto":
-        z_code = "B"
-    elif str(zahlart).lower() == "kreditkarte":
-        z_code = "C"
-    elif str(zahlart).lower() == "bar":
-        z_code = "BAR"
-    else:
-        z_code = sanitize_filename(str(zahlart)).replace(" ", "").upper()[:3]
-
+def build_datev_filename(date_str: str, vendor: str, brutto_eur: float, zahlungsweg: str, beleg_nr: str, ausgangs_inv: str) -> str:
+    z_suffix = Z_FILE_SUFFIX.get(zahlungsweg, "B")
     v_clean = sanitize_filename(vendor).replace(" ", "")[:10]
     b_suffix = f"_{sanitize_filename(beleg_nr)[:12]}" if beleg_nr and beleg_nr.lower() not in ("", "none") else ""
-    inv_suffix = f"-I{sanitize_filename(inv_nr)[:8]}" if inv_nr and inv_nr.lower() not in ("", "none") else ""
-    return f"{date_str.replace('-', '')}_{v_clean}_{brutto_eur:.2f}EUR_{z_code}{b_suffix}{inv_suffix}.pdf"
+    inv_suffix = f"-I{sanitize_filename(ausgangs_inv)[:8]}" if ausgangs_inv and ausgangs_inv.lower() not in ("", "none") else ""
+    return f"{date_str.replace('-', '')}_{v_clean}_{brutto_eur:.2f}EUR_{z_suffix}{b_suffix}{inv_suffix}.pdf"
 
-def get_gemini_prompt(skr_mode: str) -> str:
-    return """Du bist ein Experte für deutsche Finanzbuchhaltung. Extrahiere folgende Daten:
+def get_gemini_prompt() -> str:
+    return """Du bist ein Experte für deutsche Finanzbuchhaltung. Extrahiere folgende Daten aus dem Beleg:
 1. Rechnungsnummer
 2. Rechnungsdatum (YYYY-MM-DD)
 3. Verkäufer (max 12 Zeichen)
@@ -239,6 +200,7 @@ def on_table_edited() -> None:
 
     df = st.session_state.edited_receipts.copy()
     
+    # 데이터 행 수동 삭제 처리
     if deleted_rows:
         indices_to_drop = [df.index[int(idx)] for idx in deleted_rows]
         df = df.drop(index=indices_to_drop)
@@ -247,20 +209,19 @@ def on_table_edited() -> None:
         st.session_state.edited_receipts = df
         return
 
+    # 데이터 수동 수정 처리
     for row_idx_str, changes in edited_rows.items():
         label = df.index[int(row_idx_str)]
-        for col, new_val in changes.items(): 
-            df.at[label, col] = new_val
+        for col, new_val in changes.items(): df.at[label, col] = new_val
 
         brutto_eur = float(df.at[label, "Bruttobetrag (EUR)"])
-        mwst_19, mwst_7, netto = calculate_tax_details(brutto_eur, str(df.at[label, "Steuerschlüssel"]))
+        mwst_19, mwst_7, netto = calculate_tax_details(brutto_eur, str(df.at[label, "BU-Schlüssel"]))
         df.at[label, "USt/Vorsteuer 19%"] = mwst_19
         df.at[label, "Vorsteuer 7%"]  = mwst_7
         df.at[label, "Nettobetrag (Haben)"]    = netto
-        # 🛠️ [Fix] 컬럼 매핑 완벽 일치 구조 처리
-        df.at[label, "Zukünftiger DATEV-Dateiname"] = build_datev_filename(
-            str(df.at[label, "Rechnungsdatum"]), str(df.at[label, "Verkäufer"]), brutto_eur,
-            str(df.at[label, "Zahlweg (DATEV)"]), str(df.at[label, "Beleg_Nr"]), str(df.at[label, "🔗 Ausgangs-INV"])
+        df.at[label, "DATEV-Dateiname"] = build_datev_filename(
+            str(df.at[label, "Belegdatum"]), str(df.at[label, "Kreditor"]), brutto_eur,
+            str(df.at[label, "Zahlungsweg"]), str(df.at[label, "Belegnummer"]), str(df.at[label, "Ausgangs-Rechnungsnummer"])
         )
     st.session_state.edited_receipts = df
 
@@ -278,8 +239,8 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
         for row in ws.iter_rows(min_row=2):
             for col_idx, cell in enumerate(row, start=1):
                 cell.border = border_style
-                if col_idx in (5, 6, 7, 8): cell.number_format = '#,##0.00" €"'
-                elif col_idx == 4: cell.alignment = Alignment(horizontal="right")
+                if col_idx in (7, 9, 10, 11): cell.number_format = '#,##0.00" €"'
+                elif col_idx in (2, 5, 8, 12): cell.alignment = Alignment(horizontal="right")
 
         for col in ws.columns:
             max_len = 0
@@ -295,62 +256,34 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
 # MAIN UI
 # ══════════════════════════════════════════════════════════════════════════════
 
-col_menu1, col_menu2 = st.columns(2)
+# 상단 규칙 관리 메뉴 (기본값 Shell, Google 두 개만 유지)
+with st.expander("Buchungsregeln verwalten", expanded=False):
+    with st.form("new_rule_form", clear_on_submit=True):
+        c1, c2, c3 = st.columns([2, 3, 3])
+        with c1: new_vendor = st.text_input("Kreditor / Vendor")
+        with c2: new_skr03  = st.text_input("SKR03")
+        with c3: new_skr04  = st.text_input("SKR04")
+        if st.form_submit_button("Regel speichern") and new_vendor:
+            st.session_state.custom_rules[new_vendor] = {"SKR03": new_skr03, "SKR04": new_skr04}
+            st.rerun()
 
-with col_menu1:
-    with st.expander("💼 Buchungsregeln verwalten", expanded=False):
-        with st.form("new_rule_form", clear_on_submit=True):
-            c1, c2, c3 = st.columns([2, 3, 3])
-            with c1: new_vendor = st.text_input("Kreditor / Vendor")
-            with c2: new_skr03  = st.text_input("SKR03")
-            with c3: new_skr04  = st.text_input("SKR04")
-            if st.form_submit_button("Regel speichern") and new_vendor:
-                st.session_state.custom_rules[new_vendor] = {"SKR03": new_skr03, "SKR04": new_skr04}
-                save_permanent_config()  # 💾 즉시 하드 저장
+    if st.session_state.custom_rules:
+        for v in list(st.session_state.custom_rules.keys()):
+            r_col1, r_col2, r_col3, r_col4 = st.columns([2, 3, 3, 1])
+            r_col1.text(v)
+            r_col2.text(st.session_state.custom_rules[v]["SKR03"])
+            r_col3.text(st.session_state.custom_rules[v]["SKR04"])
+            if r_col4.button("Löschen", key=f"del_{v}"):
+                del st.session_state.custom_rules[v]
                 st.rerun()
-
-        if st.session_state.custom_rules:
-            for v in list(st.session_state.custom_rules.keys()):
-                r_col1, r_col2, r_col3, r_col4 = st.columns([2, 3, 3, 1])
-                r_col1.text(v)
-                r_col2.text(st.session_state.custom_rules[v]["SKR03"])
-                r_col3.text(st.session_state.custom_rules[v]["SKR04"])
-                if r_col4.button("Löschen", key=f"del_{v}"):
-                    del st.session_state.custom_rules[v]
-                    save_permanent_config()  # 💾 삭제 즉시 하드 저장
-                    st.rerun()
-
-with col_menu2:
-    with st.expander("💳 Zahlungswege verwalten", expanded=False):
-        with st.form("new_zw_form", clear_on_submit=True):
-            zw_in, zw_btn = st.columns([3, 1])
-            with zw_in: new_zw = st.text_input("Neuer Zahlungsweg (z.B. Paypal, Bar, Amazon)")
-            with zw_btn: st.markdown("<br>", unsafe_allow_html=True); submit_zw = st.form_submit_button("Hinzufügen")
-            if submit_zw and new_zw:
-                if new_zw not in st.session_state.custom_zahlungswege:
-                    st.session_state.custom_zahlungswege.append(new_zw)
-                    save_permanent_config()  # 💾 추가 즉시 하드 저장
-                    st.rerun()
-
-        if st.session_state.custom_zahlungswege:
-            for zw_item in list(st.session_state.custom_zahlungswege):
-                zw_c1, zw_c2 = st.columns([3, 1])
-                zw_c1.text(zw_item)
-                if zw_item not in ["Firmenkonto", "Kreditkarte"]:  # 마스터 기본값 삭제 방지 보호
-                    if zw_c2.button("Löschen", key=f"del_zw_{zw_item}"):
-                        st.session_state.custom_zahlungswege.remove(zw_item)
-                        save_permanent_config()  # 💾 삭제 즉시 하드 저장
-                        st.rerun()
 
 st.markdown("---")
 
-uploaded_files = st.file_uploader("📂 Digitale Belege hochladen (PDF, PNG, JPG, JPEG)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("Digitale Belege hochladen (PDF, PNG, JPG, JPEG)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
 
 col_cfg1, col_cfg2 = st.columns(2)
-with col_cfg1: 
-    default_zahlart = st.radio("Zahlungsweg Standard", options=st.session_state.custom_zahlungswege, index=0, horizontal=True)
-with col_cfg2: 
-    selected_skr = st.radio("SKR Standard", options=["SKR03", "SKR04"], index=1, horizontal=True)
+with col_cfg1: default_zahlart = st.radio("Zahlungsweg Standard", options=ZAHLART_OPTIONS, index=0, horizontal=True)
+with col_cfg2: selected_skr = st.radio("SKR Standard", options=["SKR03", "SKR04"], index=1, horizontal=True)
 
 if uploaded_files:
     batch_key = "".join(f.name for f in uploaded_files) + f"_{selected_skr}_{default_zahlart}"
@@ -363,34 +296,33 @@ if uploaded_files:
         total_files = len(uploaded_files)
         progress_bar = st.progress(0)
 
-        with st.spinner("🔮 Analysiere Dokumente via Kognitiver AI-Engine..."):
+        with st.spinner("Analysiere Dokumente via Kognitiver AI-Engine..."):
             for idx, uploaded_file in enumerate(uploaded_files):
                 file_bytes = uploaded_file.read()
                 ext        = uploaded_file.name.rsplit(".", 1)[-1].lower()
                 mime_type  = MIME_MAP.get(ext, "application/octet-stream")
 
-                res = ask_gemini_vision_cached(file_bytes, mime_type, selected_skr, API_KEY)
+                res = ask_gemini_vision_cached(file_bytes, mime_type, API_KEY)
                 beleg_nr, date_str, vendor, total, currency, _, mwst_type, raw_text = res[0], res[1], res[2], res[3], res[4], res[5], res[6], res[7]
                 was_called = res[8] if len(res) > 8 else False
 
                 assigned_kategorie = get_assigned_account(vendor, selected_skr)
                 mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
 
-                # 🛠️ [Fix complete] 아래 딕셔너리 Key 명칭과 st.data_editor 컬럼 환경명을 'Zahlweg (DATEV)'로 완벽 통일하여 공란 발생 박멸
                 rows.append({
-                    "Rechnungsdatum":  date_str,
-                    "Verkäufer":        vendor,
-                    f"{selected_skr}": assigned_kategorie, 
-                    "Beleg-Soll (Orig.)": f"{total:,.2f} $" if currency == "USD" else f"{total:,.2f} €", 
-                    "Bruttobetrag (EUR)": total,      
-                    "USt/Vorsteuer 19%":  mwst_19,
-                    "Vorsteuer 7%":   mwst_7,
-                    "Nettobetrag (Haben)":      netto,
-                    "Zahlweg (DATEV)":          default_zahlart,  
-                    "Steuerschlüssel":        mwst_type,
-                    "Beleg_Nr":        beleg_nr,
-                    "🔗 Ausgangs-INV":  "",
-                    "Zukünftiger DATEV-Dateiname": build_datev_filename(date_str, vendor, total, default_zahlart, beleg_nr, ""),
+                    "Belegdatum": date_str,
+                    "Ausgangs-Rechnungsnummer": "",
+                    "Kreditor": vendor,
+                    "Belegnummer": beleg_nr,
+                    "Gegenkonto": assigned_kategorie,
+                    "Beleg-Soll (Orig.)": f"{total:,.2f} $" if currency == "USD" else f"{total:,.2f} €",
+                    "Zahlungsweg": default_zahlart,
+                    "Bruttobetrag (EUR)": total,
+                    "USt/Vorsteuer 19%": mwst_19,
+                    "Vorsteuer 7%": mwst_7,
+                    "Nettobetrag (Haben)": netto,
+                    "BU-Schlüssel": mwst_type,
+                    "DATEV-Dateiname": build_datev_filename(date_str, vendor, total, default_zahlart, beleg_nr, ""),
                     "_FileExt": ext, "_RawBytes": file_bytes, "_OcrText": raw_text
                 })
                 progress_bar.progress(int((idx + 1) / total_files * 100))
@@ -399,50 +331,53 @@ if uploaded_files:
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
-    # 🛠️ 데이터 에디터 바인딩
+    # 🛠️ [Fix] TextColumn 오류 방지를 위해 하이픈(-) 컴포넌트 안전 자산 처리 및 정형화된 열 세팅 적용
     st.data_editor(
         st.session_state.edited_receipts,
         use_container_width=True, num_rows="dynamic", height=400, key="beleg_editor_key", on_change=on_table_edited,
         column_config={
-            f"{selected_skr}": st.column_config.TextColumn(f"📊 {selected_skr}", width="medium", help="👉 Zur Prüfung durch Steuerberater (Leer)"),
-            "Beleg-Soll (Orig.)":    st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True), 
-            "Bruttobetrag (EUR)":    st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €"),
-            "USt/Vorsteuer 19%":  st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
-            "Vorsteuer 7%":   st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
-            "Nettobetrag (Haben)":     st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
-            "Zahlweg (DATEV)":         st.column_config.SelectboxColumn("Zahlweg (DATEV)", options=st.session_state.custom_zahlungswege, width="medium"),
-            "Steuerschlüssel":       st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
-            "🔗 Ausgangs-INV":  st.column_config.TextColumn("🔗 Ausgangs-INV"),
-            "Zukünftiger DATEV-Dateiname": st.column_config.TextColumn("Zukünftiger DATEV-Dateiname", width="max"),
+            "Belegdatum": st.column_config.TextColumn("Belegdatum", width="small"),
+            "Ausgangs-Rechnungsnummer": st.column_config.TextColumn("Ausgangs-Rechnungsnummer", width="medium"),
+            "Kreditor": st.column_config.TextColumn("Kreditor", width="medium"),
+            "Belegnummer": st.column_config.TextColumn("Belegnummer", width="small"),
+            "Gegenkonto": st.column_config.TextColumn("Gegenkonto", width="medium"),
+            "Beleg-Soll (Orig.)": st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True),
+            "Zahlungsweg": st.column_config.SelectboxColumn("Zahlungsweg", options=ZAHLART_OPTIONS, width="small"),
+            "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €"),
+            "USt/Vorsteuer 19%": st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
+            "Vorsteuer 7%": st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
+            "Nettobetrag (Haben)": st.column_config.NumberColumn("Nettobetrag (Haben)", format="%,.2f €"),
+            "BU-Schlüssel": st.column_config.SelectboxColumn("BU-Schlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"], width="small"),
+            "DATEV-Dateiname": st.column_config.TextColumn("DATEV-Dateiname", width="max"),
             "_FileExt": None, "_RawBytes": None, "_OcrText": None
         },
     )
 
-    # DOWNLOADS AREA
+    # DOWNLOADS & SECURITY DESTRUCTION
     df_final = st.session_state.edited_receipts
     today = datetime.now().strftime("%Y%m%d")
-    st.markdown("### 📥 Bereitstellung der DATEV-Exportdateien")
+    
+    st.markdown("### Bereitstellung der DATEV-Exportdateien")
     col_dl1, col_dl2 = st.columns(2)
-    with col_dl1: st.download_button(label=f"📊 Buchungsliste als Excel-Export herunterladen (.xlsx)", data=build_excel_bytes(df_final), file_name=f"DATEV_{selected_skr}_Buchungsliste_{today}.xlsx", use_container_width=True)
+    with col_dl1: 
+        st.download_button(label="Buchungsliste als Excel-Export herunterladen (.xlsx)", data=build_excel_bytes(df_final), file_name=f"DATEV_{selected_skr}_Buchungsliste_{today}.xlsx", use_container_width=True)
     with col_dl2:
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             for _, row in df_final.iterrows():
                 sandwich_pdf_bytes = create_sandwich_pdf(row["_RawBytes"], row["_FileExt"], row["_OcrText"])
-                zip_file.writestr(row["Zukünftiger DATEV-Dateiname"], sandwich_pdf_bytes)
+                zip_file.writestr(row["DATEV-Dateiname"], sandwich_pdf_bytes)
         zip_buffer.seek(0)
-        st.download_button(label="📁 PDF-Belege als ZIP-Archiv herunterladen (.zip)", data=zip_buffer.getvalue(), file_name=f"DATEV_Digitale_Belege_{today}.zip", use_container_width=True, type="primary")
+        st.download_button(label="PDF-Belege als ZIP-Archiv herunterladen (.zip)", data=zip_buffer.getvalue(), file_name=f"DATEV_Digitale_Belege_{today}.zip", use_container_width=True, type="primary")
 
-    # 🔒 선별적 세션 데이터 파기 장치
+    # 🛡️ 수동 보안 파기 제어판 (모든 다운로드를 마친 후 임시 RAM 완전 소멸 처리)
     st.markdown("---")
     st.markdown("#### 🔒 Datensicherheit & Datenschutz")
-    st.info("Alle Belege befinden sich ausschließlich im RAM Ihres Browsers. Ihre Buchungsregeln und Zahlungswege bleiben permanent auf der Festplatte gespeichert.")
+    st.info("Alle hochgeladenen Belege befinden sich ausschließlich im flüchtigen RAM-Arbeitsspeicher Ihres Browsers. Nach dem Herunterladen beider Dateien können Sie den Speicher manuell komplett bereinigen.")
     
-    if st.button("Arbeitssitzung beenden (Belege unwiderruflich aus dem RAM löschen)", type="secondary", use_container_width=True):
-        st.session_state.edited_receipts = None
-        if "last_batch_key" in st.session_state:
-            del st.session_state.last_batch_key
+    if st.button("Arbeitssitzung beenden (Daten unwiderruflich löschen)", type="secondary", use_container_width=True):
+        st.session_state.clear()
         st.cache_data.clear()
-        st.success("Erfolgreich bereinigt! Alle Belegdaten wurden restlos entfernt. Ihre Einstellungen blieben sicher auf der Festplatte erhalten.")
-        time.sleep(1.2)
+        st.success("Erfolgreich gelöscht! Alle Belegdaten und AI-Ergebnisse wurden restlos aus dem Arbeitsspeicher entfernt.")
+        time.sleep(1.5)
         st.rerun()
