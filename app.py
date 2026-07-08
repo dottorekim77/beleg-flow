@@ -17,7 +17,7 @@ from PIL import Image
 PAGE_TITLE      = "DATEV Beleg-Parser Pro AI"
 PAGE_ICON       = "🧾"
 GEMINI_MODEL    = "gemini-3.1-flash-lite"   
-FREE_TIER_DELAY = 0.0  # 유료 계정 속도 100% 활용
+FREE_TIER_DELAY = 0.0  
 MWST_19_FACTOR  = 19 / 119
 MWST_7_FACTOR   = 7 / 107
 
@@ -28,7 +28,6 @@ MIME_MAP = {
     "png":  "image/png",
 }
 
-# 공식 Zahlungsweg 옵션 및 DATEV 파일명 접미사 매핑
 ZAHLART_OPTIONS = ["Firmenkonto", "Kreditkarte", "Paypal", "Bar"]
 Z_FILE_SUFFIX   = {"Firmenkonto": "B", "Kreditkarte": "C", "Paypal": "P", "Bar": "BAR"}
 
@@ -65,7 +64,6 @@ if not API_KEY:
 else:
     genai.configure(api_key=API_KEY)
 
-# 세션 규칙 상태 초기화 (두 가지만 포함된 딕셔너리로 초기화)
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = INITIAL_VENDORS.copy()
 if "edited_receipts" not in st.session_state:
@@ -202,7 +200,7 @@ def on_table_edited() -> None:
 
     df = st.session_state.edited_receipts.copy()
     
-    # 데이터 행 수동 삭제 이벤트 대응
+    # 데이터 행 수동 삭제 처리
     if deleted_rows:
         indices_to_drop = [df.index[int(idx)] for idx in deleted_rows]
         df = df.drop(index=indices_to_drop)
@@ -211,7 +209,7 @@ def on_table_edited() -> None:
         st.session_state.edited_receipts = df
         return
 
-    # 데이터 수동 수정 이벤트 대응 (Zahlungsweg 변경 포함)
+    # 데이터 수동 수정 처리
     for row_idx_str, changes in edited_rows.items():
         label = df.index[int(row_idx_str)]
         for col, new_val in changes.items(): df.at[label, col] = new_val
@@ -258,7 +256,7 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
 # MAIN UI
 # ══════════════════════════════════════════════════════════════════════════════
 
-# 🛠️ 상단 고정 규칙 관리 메뉴 (Shell, Google 두 가지만 기본값으로 활성화)
+# 상단 규칙 관리 메뉴 (기본값 Shell, Google 두 개만 유지)
 with st.expander("Buchungsregeln verwalten", expanded=False):
     with st.form("new_rule_form", clear_on_submit=True):
         c1, c2, c3 = st.columns([2, 3, 3])
@@ -311,7 +309,6 @@ if uploaded_files:
                 assigned_kategorie = get_assigned_account(vendor, selected_skr)
                 mwst_19, mwst_7, netto = calculate_tax_details(total, mwst_type)
 
-                # 지정하신 완벽한 순서 구조로 데이터 매핑
                 rows.append({
                     "Belegdatum": date_str,
                     "Ausgangs-Rechnungsnummer": "",
@@ -334,7 +331,7 @@ if uploaded_files:
         st.session_state.edited_receipts = pd.DataFrame(rows, index=range(1, len(rows) + 1))
         st.session_state.edited_receipts.index.name = "Nr."
 
-    # DATA EDITOR (이모티콘 완벽 제거 / 순서 정렬 / 수동 편집 및 유동적 삭제 보장)
+    # 🛠️ [Fix] TextColumn 오류 방지를 위해 하이픈(-) 컴포넌트 안전 자산 처리 및 정형화된 열 세팅 적용
     st.data_editor(
         st.session_state.edited_receipts,
         use_container_width=True, num_rows="dynamic", height=400, key="beleg_editor_key", on_change=on_table_edited,
@@ -343,7 +340,7 @@ if uploaded_files:
             "Ausgangs-Rechnungsnummer": st.column_config.TextColumn("Ausgangs-Rechnungsnummer", width="medium"),
             "Kreditor": st.column_config.TextColumn("Kreditor", width="medium"),
             "Belegnummer": st.column_config.TextColumn("Belegnummer", width="small"),
-            "Gegenkonto": st.column_config.TextColumn("Gegenkonto", width="medium", placeholder="Für Steuerberater (Leer)"),
+            "Gegenkonto": st.column_config.TextColumn("Gegenkonto", width="medium"),
             "Beleg-Soll (Orig.)": st.column_config.TextColumn("Beleg-Soll (Orig.)", disabled=True),
             "Zahlungsweg": st.column_config.SelectboxColumn("Zahlungsweg", options=ZAHLART_OPTIONS, width="small"),
             "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €"),
