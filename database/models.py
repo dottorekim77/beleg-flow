@@ -2,6 +2,9 @@ from typing import Optional, List
 from datetime import datetime
 from sqlmodel import SQLModel, Field, Relationship
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 1. Company 모델 (계정/회사 정보 마스터)
+# ══════════════════════════════════════════════════════════════════════════════
 class Company(SQLModel, table=True):
     __tablename__ = "companies"
     
@@ -11,11 +14,14 @@ class Company(SQLModel, table=True):
     skr_mode: str = Field(default="SKR04")  # SKR03 또는 SKR04
     vat_type: str = Field(default="Standard")  # Standard 또는 Kleinunternehmer
 
-    # 관계 정의
+    # 양방향 관계 매핑 (String 기반으로 오버랩 충돌 방지)
     receipts: List["Receipt"] = Relationship(back_populates="company")
     rules: List["LearningRule"] = Relationship(back_populates="company")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 2. Receipt 모델 (비용/매출 인보이스)
+# ══════════════════════════════════════════════════════════════════════════════
 class Receipt(SQLModel, table=True):
     __tablename__ = "receipts"
 
@@ -34,11 +40,16 @@ class Receipt(SQLModel, table=True):
     currency: str = Field(default="EUR")
     steuerschluessel: str = Field(default="AUTO_19")
 
-    # 관계 정의
-    company: Company = Relationship(back_populates="receipts")
+    # 상위 회사와의 관계
+    company: "Company" = Relationship(back_populates="receipts")
+    
+    # 은행 매칭 테이블과의 일대다 관계
     bank_matches: List["BankTransaction"] = Relationship(back_populates="matched_receipt")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 3. BankTransaction 모델 (은행 계좌 내역 통계)
+# ══════════════════════════════════════════════════════════════════════════════
 class BankTransaction(SQLModel, table=True):
     __tablename__ = "bank_transactions"
 
@@ -46,13 +57,17 @@ class BankTransaction(SQLModel, table=True):
     booking_date: str
     amount: float
     payee: str
+    zweck: Optional[str] = Field(default="")
     matched_receipt_id: Optional[int] = Field(default=None, foreign_key="receipts.id")
     match_score: float = Field(default=0.0)
 
-    # 관계 정의
-    matched_receipt: Optional[Receipt] = Relationship(back_populates="bank_matches")
+    # 매칭된 영수증과의 관계
+    matched_receipt: Optional["Receipt"] = Relationship(back_populates="bank_matches")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 4. LearningRule 모델 (AI 피드백 피팅 시스템 마스터)
+# ══════════════════════════════════════════════════════════════════════════════
 class LearningRule(SQLModel, table=True):
     __tablename__ = "learning_rules"
 
@@ -63,5 +78,5 @@ class LearningRule(SQLModel, table=True):
     skr_account: str
     count: int = Field(default=1)
 
-    # 관계 정의
-    company: Company = Relationship(back_populates="rules")
+    # 상위 회사와의 관계
+    company: "Company" = Relationship(back_populates="rules")
