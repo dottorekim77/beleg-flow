@@ -151,12 +151,21 @@ if uploaded_files:
                 val_status = "✅ OK" if is_valid else f"❌ {errs[0]}"
                 
                 rows.append({
-                    "Rechnungsdatum": ai_res.datum, "Verkäufer": ai_res.vendor,
-                    "Bruttobetrag (EUR)": ai_res.total, "USt/Vorsteuer 19%": mwst_19, "Vorsteuer 7%": mwst_7, "Nettobetrag (Haben)": netto,
-                    "Zahlweg (DATEV)": default_zahlart, "Steuerschlüssel": ai_res.mwst_type, "Beleg_Nr": ai_res.beleg_nr, "🔗 Ausgangs-INV": "",
+                    "Rechnungsdatum": ai_res.datum, 
+                    "Verkäufer": ai_res.vendor,
+                    f"{selected_skr}": "",  # 👈 [여기에 추가] 데이터 프레임에 SKR 열을 강제로 생성합니다!
+                    "Bruttobetrag (EUR)": ai_res.total, 
+                    "USt/Vorsteuer 19%": mwst_19, 
+                    "Vorsteuer 7%": mwst_7, 
+                    "Nettobetrag (Haben)": netto,
+                    "Zahlweg (DATEV)": default_zahlart, 
+                    "Steuerschlüssel": ai_res.mwst_type, 
+                    "Beleg_Nr": ai_res.beleg_nr, 
+                    "🔗 Ausgangs-INV": "",
                     "Status/Validation": val_status,
                     "Zukünftiger DATEV-Dateiname": build_datev_filename(ai_res.datum, ai_res.vendor, ai_res.total, default_zahlart, ai_res.beleg_nr, ""),
-                    "_FileExt": ext, "_RawBytes": f_bytes
+                    "_FileExt": ext, 
+                    "_RawBytes": f_bytes
                 })
                 p_bar.progress(int((idx + 1) / tot * 100))
                 if tot > 1 and idx < tot - 1: time.sleep(FREE_TIER_DELAY)
