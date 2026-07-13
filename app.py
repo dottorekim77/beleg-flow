@@ -165,9 +165,23 @@ if uploaded_files:
         st.session_state.edited_receipts.index.name = "Nr."
 
     # 🌟 [버그 원인 제거 핵심] 드롭다운 옵션이 항상 유동적으로 동기화된 데이터 테이블 렌더링
+# 🌟 [SKR 항목 노출 및 드롭다운 동기화] 데이터 에디터 렌더링
     st.data_editor(
-        st.session_state.edited_receipts, use_container_width=True, num_rows="dynamic", height=350, key="beleg_editor_key", on_change=on_table_edited,
+        st.session_state.edited_receipts, 
+        use_container_width=True, 
+        num_rows="dynamic", 
+        height=350, 
+        key="beleg_editor_key", 
+        on_change=on_table_edited,
         column_config={
+            # 👇 이 부분이 누락되었거나 이름이 안 맞아 숨겨졌던 SKR 항목을 화면에 강제로 등장시킵니다.
+            f"{selected_skr}": st.column_config.TextColumn(
+                label=f"📊 {selected_skr} 계정", 
+                width="medium", 
+                help=" Steuerberater가 사용하는 독일 표준 계정 과목 코드입니다."
+            ),
+            "Rechnungsdatum": st.column_config.TextColumn("Rechnungsdatum"),
+            "Verkäufer": st.column_config.TextColumn("Verkäufer"),
             "Bruttobetrag (EUR)": st.column_config.NumberColumn("Bruttobetrag (EUR)", format="%,.2f €"),
             "USt/Vorsteuer 19%": st.column_config.NumberColumn("USt/Vorsteuer 19%", format="%,.2f €"),
             "Vorsteuer 7%": st.column_config.NumberColumn("Vorsteuer 7%", format="%,.2f €"),
@@ -176,10 +190,10 @@ if uploaded_files:
             "Steuerschlüssel": st.column_config.SelectboxColumn("Steuerschlüssel", options=["19_Only", "7_Only", "Split", "AUTO_19", "0_Only"]),
             "Status/Validation": st.column_config.TextColumn("검증 상태", disabled=True),
             "Zukünftiger DATEV-Dateiname": st.column_config.TextColumn("DATEV 파일명 명명 규칙", width="max"),
-            "_FileExt": None, "_RawBytes": None
+            "_FileExt": None, 
+            "_RawBytes": None
         }
     )
-
     # ══════════════════════════════════════════════════════════════════════════════
     # 5. DB 확정 저장 및 내보내기 파이프라인
     # ══════════════════════════════════════════════════════════════════════════════
