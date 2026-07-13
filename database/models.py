@@ -3,8 +3,8 @@ from datetime import datetime
 from sqlalchemy import MetaData
 from sqlmodel import SQLModel, Field
 
-# 🌟 [핵심] Streamlit Hot-Reload 충돌 방지용 독립 메타데이터 인스턴스 생성
-# 기본 글로벌 SQLModel.metadata를 오염시키지 않고 독립된 생태계를 구성합니다.
+# 🌟 Streamlit Hot-Reload 충돌 방지용 독립 메타데이터 인스턴스 생성
+# 기본 글로벌 SQLModel.metadata를 사용하지 않고 독립된 생태계를 구성합니다.
 custom_metadata = MetaData()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -12,7 +12,7 @@ custom_metadata = MetaData()
 # ══════════════════════════════════════════════════════════════════════════════
 class Company(SQLModel, table=True):
     __tablename__ = "companies"
-    metadata = custom_metadata  # 👈 중복 등록 충돌 방지 핵심 설정
+    metadata = custom_metadata  
     
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
@@ -26,7 +26,7 @@ class Company(SQLModel, table=True):
 # ══════════════════════════════════════════════════════════════════════════════
 class Receipt(SQLModel, table=True):
     __tablename__ = "receipts"
-    metadata = custom_metadata  # 👈 중복 등록 충돌 방지 핵심 설정
+    metadata = custom_metadata  
 
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True)
@@ -49,7 +49,7 @@ class Receipt(SQLModel, table=True):
 # ══════════════════════════════════════════════════════════════════════════════
 class BankTransaction(SQLModel, table=True):
     __tablename__ = "bank_transactions"
-    metadata = custom_metadata  # 👈 중복 등록 충돌 방지 핵심 설정
+    metadata = custom_metadata  
 
     id: Optional[int] = Field(default=None, primary_key=True)
     booking_date: str
@@ -65,7 +65,7 @@ class BankTransaction(SQLModel, table=True):
 # ══════════════════════════════════════════════════════════════════════════════
 class LearningRule(SQLModel, table=True):
     __tablename__ = "learning_rules"
-    metadata = custom_metadata  # 👈 중복 등록 충돌 방지 핵심 설정
+    metadata = custom_metadata  
 
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True)
