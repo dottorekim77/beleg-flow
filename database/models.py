@@ -2,9 +2,16 @@ from typing import Optional
 from datetime import datetime
 from sqlmodel import SQLModel, Field
 
+# 🌟 [핵심] Streamlit 재실행 시 테이블 중복 등록 에러(InvalidRequestError)를 완전히 방지하는 치트키
+# 이미 메타데이터에 등록된 테이블명이 있다면 초기화하여 충돌을 막습니다.
+def clear_metadata_cache(table_name: str):
+    if table_name in SQLModel.metadata.tables:
+        del SQLModel.metadata.tables[table_name]
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 1. Company 모델 (회사 정보 마스터)
 # ══════════════════════════════════════════════════════════════════════════════
+clear_metadata_cache("companies")
 class Company(SQLModel, table=True):
     __tablename__ = "companies"
     
@@ -18,11 +25,12 @@ class Company(SQLModel, table=True):
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. Receipt 모델 (비용 / 영수증 마스터)
 # ══════════════════════════════════════════════════════════════════════════════
+clear_metadata_cache("receipts")
 class Receipt(SQLModel, table=True):
     __tablename__ = "receipts"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    company_id: int = Field(index=True)  # FK 수동 인덱싱 매핑
+    company_id: int = Field(index=True)
     vendor: str = Field(index=True)
     invoice_number: Optional[str] = Field(default="None", index=True)
     date: str = Field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))
@@ -40,6 +48,7 @@ class Receipt(SQLModel, table=True):
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. BankTransaction 모델 (은행 거래 정보)
 # ══════════════════════════════════════════════════════════════════════════════
+clear_metadata_cache("bank_transactions")
 class BankTransaction(SQLModel, table=True):
     __tablename__ = "bank_transactions"
 
@@ -55,6 +64,7 @@ class BankTransaction(SQLModel, table=True):
 # ══════════════════════════════════════════════════════════════════════════════
 # 4. LearningRule 모델 (AI 추천 엔진용 히스토리)
 # ══════════════════════════════════════════════════════════════════════════════
+clear_metadata_cache("learning_rules")
 class LearningRule(SQLModel, table=True):
     __tablename__ = "learning_rules"
 
