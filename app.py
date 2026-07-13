@@ -1,49 +1,44 @@
 import streamlit as st
-from database.connection import init_db, engine
-from database.models import Company, Receipt
-from sqlmodel import Session, select
-from backend.ocr import ask_gemini_structured
-from backend.tax import calculate_tax_details
-from backend.datev import build_datev_filename
+from sqlmodel import Session
+from database.connection import engine
+from database.models import BankTransaction
+from backend.core.validation import verify_receipt_data
+from backend.core.matching import match_transaction_to_receipts, execute_auto_matching
 
-# 1단계 DB 테이블 자동 초기화 및 빌드 실행
-init_db()
+st.subheader("⚙️ 백엔드 코어 비즈니스 로직 테스트 벤치")
 
-# 세션 내 가상의 기본 회사(Default Tenant) 확보 로직
 with Session(engine) as db_session:
-    default_company = db_session.exec(select(Company).where(Company.name == "My Business DE")).first()
-    if not default_company:
-        default_company = Company(name="My Business DE", industry="Software", skr_mode="SKR04", vat_type="Standard")
-        db_session.add(default_company)
-        db_session.commit()
-        db_session.refresh(default_company)
-
-st.title("🚀 SaaS 준비형 AI 회계 플랫폼 Engine")
-
-# 영수증 파일 업로드 이벤트 발생 시 내부 처리 로직 예시
-# (기존 rows.append 영역에 이제 실제 데이터베이스 적재 코드가 매핑됩니다)
-if st.checkbox("DB 적재 테스트 파이프라인 가동"):
-    # 파일 업로드 및 분석 루프가 돌았다고 가정 시:
-    with Session(engine) as db_session:
-        # 3단계: 정형화 JSON OCR 호출 결과 수신
-        # ai_res: StructuredReceiptResponse = ask_gemini_structured(f_bytes, mime, api_key)
+    # 예시 데이터 생성 및 유효성 검증 시뮬레이션
+    mock_receipt_input = {
+        "vendor": "Amazon EU",
+        "invoice_number": "INV-2026-005",
+        "date": "2026-07-12",
+        "brutto": 23.45,
+        "netto": 19.71,
+        "vat19": 3.74,
+        "vat7": 0.0,
+        "currency": "EUR"
+    }
+    
+    # 4단계 검증기 작동
+    is_valid, err_messages = verify_receipt_data(db_session, company_id=1, r_dict=mock_receipt_input)
+    
+    if not is_valid:
+        st.error(f"❌ 검증 실패: {err_messages}")
+    else:
+        st.success("✅ 4단계 통과: 데이터 정밀 검증 및 중복 없음 확인 완료.")
         
-        # 가상의 데이터 매핑 예시
-        mwst_19, mwst_7, netto = calculate_tax_details(119.0, "AUTO_19")
-        
-        new_receipt = Receipt(
-            company_id=default_company.id,
-            vendor="Shell",
-            invoice_number="INV-2026-991",
-            date="2026-07-13",
-            brutto=119.0,
-            netto=netto,
-            vat19=mwst_19,
-            vat7=mwst_7,
-            currency="EUR",
-            steuerschluessel="AUTO_19"
+        # 5단계 매칭 엔진 작동 테스트용 가상 은행 거래 데이터 적재
+        mock_tx = BankTransaction(
+            booking_date="2026-07-13", # 하루 뒤 대금 인출 시나리오
+            amount=-23.45,
+            payee="AMAZON DE PAYMENTS"
         )
         
-        db_session.add(new_receipt)
-        db_session.commit() # 💾 하드디스크 accounting.db에 영구 보존 처리 완료!
-        st.success("데이터베이스에 영수증 정보가 성공적으로 영구 적재되었습니다.")
+        # 매칭 알고리즘 가동
+        candidates = match_transaction_to_receipts(db_session, mock_tx, company_id=1)
+        
+        if candidates:
+            best = candidates[0]
+            st.write(f"🎯 매칭 후보 발견! 점수: **{best['score']}점** | 상태: `{best['confidence']}`")
+            st.caption(f"영수증 판매처: {best['receipt'].vendor} ↔ 은행 공급처: {mock_tx.payee}")
