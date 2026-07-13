@@ -1,65 +1,46 @@
 import os
-import re
-from datetime import datetime
+from typing import Literal
+from pydantic import BaseModel, Field
 import google.generativeai as genai
 
 GEMINI_MODEL = "gemini-3.1-flash-lite"
 
+# 💡 [3단계 핵심] AI가 무조건 이 규격의 JSON/오브젝트로 대답하도록 강제하는 스키마
+class StructuredReceiptResponse(BaseModel):
+    beleg_nr: str = Field(description="Die Rechnungs- oder Belegnummer. Falls nicht vorhanden, 'None'.")
+    datum: str = Field(description="Das Rechnungsdatum strictly im Format YYYY-MM-DD.")
+    vendor: str = Field(description="Der offizielle Name des Ausstellers (max 12 Zeichen).")
+    total: float = Field(description="Der Bruttobetrag als reine Fließkommazahl mit Punkt.")
+    currency: Literal["EUR", "USD"] = Field(description="Die offizielle Währung.")
+    mwst_type: Literal["19_Only", "7_Only", "Split", "0_Only", "AUTO_19"] = Field(description="Klassifizierung des Steuersatzes.")
+
 def configure_gemini(api_key: str):
-    """Gemini API 인증 및 설정"""
     if api_key:
         genai.configure(api_key=api_key)
 
 def load_prompt(prompt_name: str) -> str:
-    """
-    📁 prompts/ 폴더에서 지정된 .txt 프롬프트 파일을 읽어오는 함수
-    app.py 기준 최상위 경로의 prompts/ 폴더를 안전하게 역추적하여 로드합니다.
-    """
-    # 현재 파일(backend/ocr.py)의 상위 폴더(최상위 루트) 경로 획득
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     prompt_path = os.path.join(base_dir, "prompts", prompt_name)
-    
     try:
         with open(prompt_path, "r", encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
-        # 혹시 파일이 없을 경우를 대비한 하드코딩 백업 규칙 (안정성 확보)
-        return """Du bist ein Experte für deutsche Finanzbuchhaltung. Extrahiere folgende Daten:
-Beleg_Nr, Datum(YYYY-MM-DD), Vendor(max 12 chars), Total(Zahl mit .), Currency(EUR/USD), Kategorie(AUTO), MwSt_Type.
-Ausgabe strictly 7 Zeilen."""
+        return "Extrahiere Rechnungsdaten strukturiert."
 
-def parse_german_amount(raw: str) -> float:
-    """독일식 금액 표기법(,와 .의 혼용)을 파이썬 float형으로 정규화"""
-    s = re.sub(r"[€$£\s]", "", raw)
-    s = re.sub(r"(?i)(eur|usd|gbp)", "", s).strip()
-    if not s: return 0.0
-    if "." in s and "," in s:
-        if s.rfind(".") > s.rfind(","): s = s.replace(",", "")
-        else: s = s.replace(".", "").replace(",", ".")
-    elif "," in s:
-        if len(s[s.rfind(",") + 1:]) == 2: s = s.replace(",", ".")
-        else: s = s.replace(",", "")
-    try: return float(s)
-    except ValueError: return 0.0
-
-def parse_gemini_response(text: str) -> tuple:
-    """Gemini가 7줄 구조로 뱉은 텍스트 응답을 파이썬 튜플 데이터로 구조화 파싱"""
-    beleg_nr, date_str, vendor, total, currency = "", datetime.now().strftime("%Y-%m-%d"), "Unbekannt", 0.0, "EUR"
-    kategorie, mwst_type = "", "AUTO_19"
-    cleaned = re.sub(r"[*`]", "", text)
-    for line in cleaned.splitlines():
-        if ":" not in line: continue
-        key, _, value = line.partition(":")
-        key, value = key.strip(), value.strip()
-        match key:
-            case "Beleg_Nr": beleg_nr = value
-            case "Datum":
-                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value): date_str = value
-            case "Vendor": 
-                if value: vendor = value
-            case "Total": total = parse_german_amount(value)
-            case "Currency":
-                if value.upper() in ["EUR", "USD"]: currency = value.upper()
-            case "MwSt_Type":
-                if value: mwst_type = value
-    return beleg_nr, date_str, vendor, total, currency, kategorie, mwst_type
+def ask_gemini_structured(file_bytes: bytes, mime_type: str, api_key: str) -> StructuredReceiptResponse:
+    """텍스트가 아닌 완벽한 타입 안전성을 가진 Pydantic 객체를 반환합니다."""
+    configure_gemini(api_key)
+    model = genai.GenerativeModel(GEMINI_MODEL)
+    prompt = load_prompt("receipt_prompt.txt")
+    
+    # 🌟 Gemini Engine에 Structured Output 탑재 요청 선언
+    response = model.generate_content(
+        [{"mime_type": mime_type, "data": file_bytes}, prompt],
+        generation_config={
+            "response_mime_type": "application/json",
+            "response_schema": StructuredReceiptResponse,
+        }
+    )
+    
+    # Pydantic을 활용하여 안전하게 검증 및 JSON 파싱 처리
+    return StructuredReceiptResponse.model_validate_json(response.text)
