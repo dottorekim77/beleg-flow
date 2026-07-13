@@ -1,19 +1,18 @@
 from typing import Optional
 from datetime import datetime
+from sqlalchemy import MetaData
 from sqlmodel import SQLModel, Field
 
-# 🌟 [핵심] Streamlit 재실행 시 테이블 중복 등록 에러(InvalidRequestError)를 완전히 방지하는 치트키
-# 이미 메타데이터에 등록된 테이블명이 있다면 초기화하여 충돌을 막습니다.
-def clear_metadata_cache(table_name: str):
-    if table_name in SQLModel.metadata.tables:
-        del SQLModel.metadata.tables[table_name]
+# 🌟 [핵심] Streamlit Hot-Reload 충돌 방지용 독립 메타데이터 인스턴스 생성
+# 기본 글로벌 SQLModel.metadata를 오염시키지 않고 독립된 생태계를 구성합니다.
+custom_metadata = MetaData()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 1. Company 모델 (회사 정보 마스터)
 # ══════════════════════════════════════════════════════════════════════════════
-clear_metadata_cache("companies")
 class Company(SQLModel, table=True):
     __tablename__ = "companies"
+    metadata = custom_metadata  # 👈 중복 등록 충돌 방지 핵심 설정
     
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
@@ -25,9 +24,9 @@ class Company(SQLModel, table=True):
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. Receipt 모델 (비용 / 영수증 마스터)
 # ══════════════════════════════════════════════════════════════════════════════
-clear_metadata_cache("receipts")
 class Receipt(SQLModel, table=True):
     __tablename__ = "receipts"
+    metadata = custom_metadata  # 👈 중복 등록 충돌 방지 핵심 설정
 
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True)
@@ -48,9 +47,9 @@ class Receipt(SQLModel, table=True):
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. BankTransaction 모델 (은행 거래 정보)
 # ══════════════════════════════════════════════════════════════════════════════
-clear_metadata_cache("bank_transactions")
 class BankTransaction(SQLModel, table=True):
     __tablename__ = "bank_transactions"
+    metadata = custom_metadata  # 👈 중복 등록 충돌 방지 핵심 설정
 
     id: Optional[int] = Field(default=None, primary_key=True)
     booking_date: str
@@ -64,9 +63,9 @@ class BankTransaction(SQLModel, table=True):
 # ══════════════════════════════════════════════════════════════════════════════
 # 4. LearningRule 모델 (AI 추천 엔진용 히스토리)
 # ══════════════════════════════════════════════════════════════════════════════
-clear_metadata_cache("learning_rules")
 class LearningRule(SQLModel, table=True):
     __tablename__ = "learning_rules"
+    metadata = custom_metadata  # 👈 중복 등록 충돌 방지 핵심 설정
 
     id: Optional[int] = Field(default=None, primary_key=True)
     company_id: int = Field(index=True)
